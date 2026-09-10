@@ -1,0 +1,2427 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blotter — Trading Ledger</title>
+</head>
+<body>
+<!--
+  Blotter — see README.md in this repo for full developer docs
+  (architecture, storage keys, external services, calc notes).
+  Quick orientation: single-file app, React+Babel via CDN, no build
+  step — edit the JSX inside the main babel-type script tag and reload.
+-->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  :root{
+    --bg:#12181A;
+    --panel:#182022;
+    --panel-2:#1D2629;
+    --line:#2A3538;
+    --line-soft:#212B2E;
+    --ink:#E8E4D8;
+    --ink-dim:#9AA5A3;
+    --ink-faint:#5F6B69;
+    --gain:#5FAE82;
+    --gain-bg:rgba(95,174,130,0.12);
+    --loss:#C0654A;
+    --loss-bg:rgba(192,101,74,0.12);
+    --brass:#D8B25C;
+    --brass-dim:#8C7639;
+    --radius:5px;
+    --mono:'IBM Plex Mono', ui-monospace, monospace;
+    --sans:'IBM Plex Sans', -apple-system, sans-serif;
+    --display:'Space Grotesk', var(--sans);
+  }
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:14px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  #app{display:flex; min-height:100vh; max-width:1180px; margin:0 auto;}
+
+  .headline-card{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:20px 22px; margin-bottom:14px;
+  }
+  .headline-card .label{font-size:12px; color:var(--ink-faint); margin-bottom:8px;}
+  .headline-value{font-family:var(--mono); font-size:38px; font-weight:600; line-height:1;}
+  .headline-value.gain{color:var(--gain);}
+  .headline-value.loss{color:var(--loss);}
+
+  .ccy-bar{
+    display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+    margin-bottom:18px; padding-bottom:14px; border-bottom:1px solid var(--line);
+  }
+  .ccy-toggle{max-width:140px; margin-bottom:0;}
+  .ccy-toggle button{padding:6px 10px; font-size:12.5px;}
+  .fx-note{font-size:12px; color:var(--ink-faint); font-family:var(--mono); display:flex; align-items:center; gap:8px;}
+  .fx-refresh{background:none; border:none; color:var(--brass); cursor:pointer; font-family:var(--sans); font-size:12px; padding:0; text-decoration:underline; text-underline-offset:2px;}
+  .fx-refresh:disabled{opacity:0.6; cursor:default;}
+
+  .acct-btn.all-accounts{font-weight:600; margin-bottom:4px; box-shadow:none;}
+  .acct-btn.all-accounts.active{box-shadow:inset 2px 0 0 var(--brass);}
+
+  .filter-row{display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:12px;}
+  .search-input{
+    background:var(--panel); border:1px solid var(--line); color:var(--ink);
+    padding:8px 10px; border-radius:var(--radius); font-family:var(--sans); font-size:13px;
+    min-width:200px; flex:1; max-width:320px;
+  }
+  .search-input:focus{outline:1px solid var(--brass); border-color:var(--brass);}
+  .sort-controls{display:flex; align-items:center; gap:6px; flex-wrap:wrap;}
+  .btn.secondary.sm.active{border-color:var(--brass-dim); color:var(--brass); background:var(--panel-2);}
+  .notes-input{
+    background:transparent; border:1px solid transparent; color:var(--ink-dim);
+    padding:4px 6px; border-radius:4px; font-family:var(--sans); font-size:12.5px; width:140px;
+  }
+  .notes-input:hover{border-color:var(--line);}
+  .notes-input:focus{outline:none; border-color:var(--brass-dim); background:var(--bg); color:var(--ink);}
+
+  /* ---- Rail ---- */
+  .rail{
+    width:200px; flex-shrink:0;
+    border-right:1px solid var(--line);
+    padding:22px 14px;
+    display:flex; flex-direction:column; gap:22px;
+  }
+  .brand{
+    font-family:var(--display); font-weight:700; font-size:19px;
+    letter-spacing:0.2px; color:var(--ink);
+    display:flex; align-items:baseline; gap:7px;
+  }
+  .brand .mark{color:var(--brass); font-family:var(--mono); font-size:15px;}
+  .rail-section-label{
+    font-size:11px; color:var(--ink-faint); margin-bottom:8px;
+    font-family:var(--mono);
+  }
+  .acct-list{display:flex; flex-direction:column; gap:3px;}
+  .acct-btn{
+    text-align:left; background:none; border:none; color:var(--ink-dim);
+    padding:7px 9px; border-radius:var(--radius); cursor:pointer;
+    font-family:var(--sans); font-size:13.5px;
+    display:flex; justify-content:space-between; gap:6px;
+  }
+  .acct-btn:hover{background:var(--panel-2); color:var(--ink);}
+  .acct-btn.active{background:var(--panel-2); color:var(--ink); box-shadow:inset 2px 0 0 var(--brass);}
+  .acct-btn .pl{font-family:var(--mono); font-size:11.5px;}
+  .add-acct{
+    text-align:left; background:none; border:1px dashed var(--line); color:var(--ink-faint);
+    padding:7px 9px; border-radius:var(--radius); cursor:pointer; font-size:13px; margin-top:2px;
+  }
+  .add-acct:hover{color:var(--brass); border-color:var(--brass-dim);}
+  nav.tabs{display:flex; flex-direction:column; gap:2px;}
+  nav.tabs button{
+    text-align:left; background:none; border:none; color:var(--ink-dim);
+    padding:8px 9px; border-radius:var(--radius); cursor:pointer; font-size:13.5px;
+    font-family:var(--sans);
+  }
+  nav.tabs button:hover{color:var(--ink); background:var(--panel-2);}
+  nav.tabs button.active{color:var(--brass); background:var(--panel-2);}
+
+  /* ---- Main ---- */
+  main{flex:1; padding:26px 32px; min-width:0;}
+  .page-title{font-family:var(--display); font-size:22px; font-weight:600; margin:0 0 4px;}
+  .page-sub{color:var(--ink-faint); font-size:13px; margin:0 0 22px;}
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin-bottom:26px;}
+  .card{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:14px 16px;
+  }
+  .card .label{font-size:11.5px; color:var(--ink-faint); margin-bottom:8px;}
+  .card .value{font-family:var(--mono); font-size:20px; font-weight:500;}
+  .card .value.gain{color:var(--gain);}
+  .card .value.loss{color:var(--loss);}
+  .card .sub{font-size:11.5px; color:var(--ink-faint); margin-top:4px; font-family:var(--mono);}
+
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  thead th{
+    text-align:left; font-weight:500; color:var(--ink-faint); font-size:11.5px;
+    padding:0 10px 8px; border-bottom:1px solid var(--line); white-space:nowrap;
+  }
+  tbody td{padding:9px 10px; border-bottom:1px solid var(--line-soft); font-family:var(--mono); white-space:nowrap;}
+  tbody td.sym{font-family:var(--sans); font-weight:600;}
+  tbody td.name{font-family:var(--sans); color:var(--ink-dim); font-weight:400; white-space:normal; max-width:220px;}
+  tbody tr:hover td{background:var(--panel-2);}
+  .num.gain{color:var(--gain);}
+  .num.loss{color:var(--loss);}
+  .table-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel);}
+  .table-wrap table{min-width:640px;}
+
+  .section-head{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:10px;}
+  .section-head h2{font-family:var(--display); font-size:15px; font-weight:600; margin:0;}
+  .section-head .count{color:var(--ink-faint); font-size:12px; font-family:var(--mono);}
+
+  .empty{
+    border:1px dashed var(--line); border-radius:var(--radius); padding:30px 20px;
+    text-align:center; color:var(--ink-faint); font-size:13px;
+  }
+  .empty a, .linklike{color:var(--brass); cursor:pointer; text-decoration:underline; text-underline-offset:2px;}
+
+  form.form{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:18px; max-width:520px;}
+  .form-row{display:flex; gap:10px; margin-bottom:12px;}
+  .form-field{flex:1; display:flex; flex-direction:column; gap:5px;}
+  .form-field label{font-size:11.5px; color:var(--ink-faint);}
+  .form-field input, .form-field select{
+    background:var(--bg); border:1px solid var(--line); color:var(--ink);
+    padding:8px 9px; border-radius:var(--radius); font-family:var(--mono); font-size:13px;
+  }
+  .form-field input:focus, .form-field select:focus{outline:1px solid var(--brass); border-color:var(--brass);}
+  .btn{
+    background:var(--brass); color:#1A1204; border:none; padding:9px 16px;
+    border-radius:var(--radius); font-family:var(--sans); font-weight:600; font-size:13px;
+    cursor:pointer;
+  }
+  .btn:hover{background:#E6C070;}
+  .btn:disabled{opacity:0.5; cursor:default;}
+  .btn.secondary{background:none; border:1px solid var(--line); color:var(--ink); font-weight:500;}
+  .btn.secondary:hover{border-color:var(--brass-dim); color:var(--brass);}
+  .btn.sm{padding:6px 11px; font-size:12px;}
+  .inline-btn{display:flex; gap:8px; align-items:center;}
+  .hint{font-size:12px; color:var(--ink-faint); margin-top:2px;}
+  .hint.err{color:var(--loss);}
+  .hint.ok{color:var(--gain);}
+  .combo-row{display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;}
+  .combo-part{font-family:var(--mono); font-size:19px; font-weight:500;}
+  .combo-arrow{color:var(--ink-faint); font-size:16px;}
+  .combo-part.gain{color:var(--gain);}
+  .combo-part.loss{color:var(--loss);}
+
+  .toggle-row{display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;}
+  .toggle-row button{
+    flex:1; background:var(--bg); border:1px solid var(--line); color:var(--ink-dim);
+    padding:8px; border-radius:var(--radius); cursor:pointer; font-size:13px; font-weight:500;
+  }
+  .toggle-row button.active{border-color:var(--brass-dim); color:var(--brass); background:var(--panel-2);}
+
+  .import-box{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:18px; margin-bottom:16px;}
+  .import-box h3{font-family:var(--display); font-size:14px; margin:0 0 4px;}
+  .import-box p{font-size:12.5px; color:var(--ink-faint); margin:0 0 12px;}
+  .drop{
+    border:1px dashed var(--line); border-radius:var(--radius); padding:20px; text-align:center;
+    color:var(--ink-faint); font-size:12.5px; cursor:pointer;
+  }
+  .drop:hover{border-color:var(--brass-dim); color:var(--brass);}
+  .drop input{display:none;}
+  .import-log{margin-top:10px; font-size:12px; font-family:var(--mono); color:var(--ink-dim); white-space:pre-wrap;}
+
+  .badge{font-family:var(--mono); font-size:10.5px; padding:2px 5px; border-radius:3px; border:1px solid var(--line); color:var(--ink-faint);}
+  .spinner{display:inline-block; width:11px; height:11px; border:2px solid var(--line); border-top-color:var(--brass); border-radius:50%; animation:spin 0.7s linear infinite; vertical-align:-1px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .mobile-tabs{display:none;}
+  @media (max-width:820px){
+    #app{flex-direction:column;}
+    .rail{width:auto; border-right:none; border-bottom:1px solid var(--line); flex-direction:row; align-items:center; flex-wrap:wrap; padding:14px 16px;}
+    .rail-section-label, nav.tabs{display:none;}
+    .acct-list{flex-direction:row; flex-wrap:wrap;}
+    main{padding:18px 16px;}
+    .mobile-tabs{display:flex; gap:2px; overflow-x:auto; margin:0 0 20px; border-bottom:1px solid var(--line); padding-bottom:2px;}
+    .mobile-tabs button{
+      background:none; border:none; color:var(--ink-dim); padding:8px 10px; font-size:13px;
+      white-space:nowrap; cursor:pointer; border-bottom:2px solid transparent;
+    }
+    .mobile-tabs button.active{color:var(--brass); border-bottom-color:var(--brass);}
+    .form-row{flex-direction:column; gap:12px;}
+  }
+</style>
+
+<div id="app"></div>
+
+<script type="text/babel" data-presets="react">
+const {useState, useEffect, useMemo, useRef} = React;
+
+const TABS = [
+  {id:'overview', label:'Overview'},
+  {id:'holdings', label:'Holdings'},
+  {id:'history', label:'Trade history'},
+  {id:'stats', label:'Stats'},
+  {id:'sizer', label:'Position sizer'},
+  {id:'log', label:'Log a trade'},
+  {id:'import', label:'Import'},
+  {id:'settings', label:'Settings'},
+];
+
+const SEED_ACCOUNT_1 = {"name": "TFSA 1", "holdings": [], "realized": [], "activity": [], "cash": []};
+
+const SEED_ACCOUNT_2 = {"name": "TFSA 2", "holdings": [], "realized": [], "activity": [], "cash": []};
+
+function uid(){ return 'a' + Math.random().toString(36).slice(2,9); }
+function fmt(n, digits=2){
+  if(n===null || n===undefined || isNaN(n)) return '—';
+  const sign = n<0 ? '-' : '';
+  return sign + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:digits, maximumFractionDigits:digits});
+}
+function fmtMoney(n, ccy, digits=2){
+  if(n===null || n===undefined || isNaN(n)) return '—';
+  return fmt(n,digits) + ' ' + (ccy||'');
+}
+function plClass(n){ return n>0?'gain':(n<0?'loss':''); }
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+
+async function storageGet(key, shared=false){
+  try{
+    const v = window.localStorage.getItem('blotter_v1:'+key);
+    return v===null ? null : v;
+  }catch(e){ return null; }
+}
+async function storageSet(key, value, shared=false){
+  try{ window.localStorage.setItem('blotter_v1:'+key, value); return true; }
+  catch(e){ return false; }
+}
+
+// ---------- CSV parsing / normalization ----------
+
+function detectCsvType(headers){
+  const h = headers.map(x=>x.trim());
+  if(h.includes('realized_return_cad')) return 'realized';
+  if(h.includes('Market Unrealized Returns')) return 'holdings';
+  if(h.includes('activity_type')) return 'activity';
+  return 'unknown';
+}
+
+function parseNum(v){
+  if(v===undefined || v===null || v==='') return null;
+  const n = parseFloat(String(v).replace(/[",]/g,''));
+  return isNaN(n) ? null : n;
+}
+
+function normalizeHoldings(rows){
+  return rows
+    .filter(r => (r['Security Type']||'').trim() !== 'CURRENCY')
+    .map(r => {
+      const qty = parseNum(r['Quantity']);
+      const bookValueMarket = parseNum(r['Book Value (Market)']);
+      const marketValue = parseNum(r['Market Value']);
+      const secType = (r['Security Type']||'').trim();
+      // For options, Book Value (Market) is the TOTAL dollar cost (already ×100 per
+      // contract), but Market Price is a per-share/per-unit quote — divide by
+      // qty*100 so avgCost lines up with Market Price on the same per-share basis.
+      const multiplier = secType === 'OPTION' ? 100 : 1;
+      const avgCost = (qty && bookValueMarket!==null) ? bookValueMarket/(qty*multiplier) : null;
+      return {
+        id: uid(),
+        symbol: (r['Symbol']||'').trim(),
+        name: (r['Name']||'').trim(),
+        secType: secType,
+        qty: qty,
+        marketPrice: parseNum(r['Market Price']),
+        marketPriceCcy: (r['Market Price Currency']||'').trim(),
+        avgCost: avgCost,
+        bookValueCad: parseNum(r['Book Value (CAD)']),
+        marketValue: marketValue,
+        marketValueCcy: (r['Market Value Currency']||'').trim(),
+        unrealized: parseNum(r['Market Unrealized Returns']),
+        unrealizedCcy: (r['Market Unrealized Returns Currency']||'').trim(),
+        source: 'import',
+      };
+    })
+    .filter(h => h.symbol);
+}
+
+// Currency/cash line items in a holdings export (Security Type === CURRENCY) —
+// these are cash sitting in the account, not open positions, but they count
+// toward the account's total value.
+function normalizeCash(rows){
+  return rows
+    .filter(r => (r['Security Type']||'').trim() === 'CURRENCY')
+    .map(r => ({
+      ccy: (r['Market Value Currency']||r['Symbol']||'').trim(),
+      amount: parseNum(r['Market Value']),
+      bookValueCad: parseNum(r['Book Value (CAD)']),
+    }))
+    .filter(c => c.ccy && c.amount !== null);
+}
+
+function normalizeRealized(rows){
+  return rows.map(r => ({
+    id: uid(),
+    date: (r['effective_at']||'').slice(0,10),
+    symbol: (r['symbol']||'').trim(),
+    name: (r['name']||'').trim(),
+    orderId: r['order_id']||'',
+    realizedCad: parseNum(r['realized_return_cad']),
+    realizedUsd: parseNum(r['realized_return_usd']),
+    netProceedsCad: parseNum(r['net_proceeds_cad']),
+    netProceedsUsd: parseNum(r['net_proceeds_usd']),
+    initialInvCad: parseNum(r['initial_investment_cad']),
+    initialInvUsd: parseNum(r['initial_investment_usd']),
+    fx: parseNum(r['fx_rate']),
+    source: 'import',
+  })).filter(r => r.symbol);
+}
+
+function normalizeActivity(rows){
+  return rows.map(r => ({
+    id: uid(),
+    date: r['effective_date']||'',
+    time: r['effective_time']||'',
+    type: r['activity_type']||'',
+    subType: r['activity_sub_type']||'',
+    description: r['description']||'',
+    direction: r['direction']||'',
+    symbol: (r['symbol']||'').trim(),
+    quantity: parseNum(r['quantity']),
+    unitPrice: parseNum(r['unit_price']),
+    commission: parseNum(r['commission']),
+    netCash: parseNum(r['net_cash_amount']),
+    ccy: r['currency']||'',
+  }));
+}
+
+// ---------- Price lookup via Alpaca Market Data API (standalone version) ----------
+// Alpaca's TRADING API supports browser CORS, but its MARKET DATA API
+// (data.alpaca.markets — what we need for quotes) has a long-standing, unresolved
+// CORS bug for direct browser requests (see alpacahq/Alpaca-API#152). This may or
+// may not work depending on Alpaca's current state — if it fails, the error below
+// will say so plainly rather than fail silently.
+
+// ---------- Cloud sync via Supabase ----------
+// Supabase's REST API supports CORS properly (unlike Alpaca's data API), so
+// this actually works from a plain browser page. There's no real per-user
+// login here — the "sync key" you set acts as a shared secret between your
+// own devices. Treat it like a password: long, random, never shared.
+
+function getSupabaseConfig(){
+  try{
+    const raw = window.localStorage.getItem('blotter_v1:supabase_config');
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+function saveSupabaseConfig(url, anonKey, syncKey){
+  window.localStorage.setItem('blotter_v1:supabase_config', JSON.stringify({url, anonKey, syncKey}));
+}
+function clearSupabaseConfig(){
+  window.localStorage.removeItem('blotter_v1:supabase_config');
+}
+
+async function gatherFullState(){
+  const accountsRaw = await storageGet('blotter:accounts');
+  const accounts = accountsRaw ? JSON.parse(accountsRaw) : [];
+  const byAccount = {};
+  for(const a of accounts){
+    byAccount[a.id] = {
+      holdings: JSON.parse((await storageGet('blotter:holdings:'+a.id)) || '[]'),
+      realized: JSON.parse((await storageGet('blotter:realized:'+a.id)) || '[]'),
+      activity: JSON.parse((await storageGet('blotter:activity:'+a.id)) || '[]'),
+      cash: JSON.parse((await storageGet('blotter:cash:'+a.id)) || '[]'),
+    };
+  }
+  const fxrateRaw = await storageGet('blotter:fxrate');
+  return {accounts, byAccount, fxrate: fxrateRaw ? JSON.parse(fxrateRaw) : null};
+}
+
+async function restoreFullState(state){
+  await storageSet('blotter:accounts', JSON.stringify(state.accounts||[]));
+  for(const a of (state.accounts||[])){
+    const d = (state.byAccount && state.byAccount[a.id]) || {holdings:[],realized:[],activity:[],cash:[]};
+    await storageSet('blotter:holdings:'+a.id, JSON.stringify(d.holdings||[]));
+    await storageSet('blotter:realized:'+a.id, JSON.stringify(d.realized||[]));
+    await storageSet('blotter:activity:'+a.id, JSON.stringify(d.activity||[]));
+    await storageSet('blotter:cash:'+a.id, JSON.stringify(d.cash||[]));
+  }
+  if(state.fxrate) await storageSet('blotter:fxrate', JSON.stringify(state.fxrate));
+}
+
+function supabaseHeaders(cfg, extra){
+  return Object.assign({
+    'apikey': cfg.anonKey,
+    'Authorization': 'Bearer ' + cfg.anonKey,
+    'Content-Type': 'application/json',
+  }, extra||{});
+}
+
+async function pushToCloud(){
+  const cfg = getSupabaseConfig();
+  if(!cfg || !cfg.url || !cfg.anonKey || !cfg.syncKey) throw new Error('Set up cloud sync in Settings first.');
+  const state = await gatherFullState();
+  const updatedAt = new Date().toISOString();
+  let resp;
+  try{
+    resp = await fetch(cfg.url.replace(/\/$/,'') + '/rest/v1/blotter_sync?on_conflict=sync_key', {
+      method: 'POST',
+      headers: supabaseHeaders(cfg, {'Prefer': 'resolution=merge-duplicates,return=minimal'}),
+      body: JSON.stringify({sync_key: cfg.syncKey, data: state, updated_at: updatedAt}),
+    });
+  }catch(e){
+    throw new Error('Could not reach Supabase — check the Project URL.');
+  }
+  if(!resp.ok){
+    const text = await resp.text();
+    throw new Error('Push failed (' + resp.status + '): ' + text.slice(0,200));
+  }
+  return updatedAt;
+}
+
+async function pullFromCloud(){
+  const cfg = getSupabaseConfig();
+  if(!cfg || !cfg.url || !cfg.anonKey || !cfg.syncKey) throw new Error('Set up cloud sync in Settings first.');
+  let resp;
+  try{
+    resp = await fetch(cfg.url.replace(/\/$/,'') + '/rest/v1/blotter_sync?sync_key=eq.' + encodeURIComponent(cfg.syncKey) + '&select=data,updated_at', {
+      headers: supabaseHeaders(cfg),
+    });
+  }catch(e){
+    throw new Error('Could not reach Supabase — check the Project URL.');
+  }
+  if(!resp.ok){
+    const text = await resp.text();
+    throw new Error('Pull failed (' + resp.status + '): ' + text.slice(0,200));
+  }
+  const rows = await resp.json();
+  if(!rows.length) throw new Error('No cloud data found for this sync key yet — push from a device with your data first.');
+  await restoreFullState(rows[0].data);
+  return rows[0].updated_at;
+}
+
+async function checkCloudTimestamp(){
+  const cfg = getSupabaseConfig();
+  if(!cfg || !cfg.url || !cfg.anonKey || !cfg.syncKey) return null;
+  try{
+    const resp = await fetch(cfg.url.replace(/\/$/,'') + '/rest/v1/blotter_sync?sync_key=eq.' + encodeURIComponent(cfg.syncKey) + '&select=updated_at', {
+      headers: supabaseHeaders(cfg),
+    });
+    if(!resp.ok) return null;
+    const rows = await resp.json();
+    return rows.length ? rows[0].updated_at : null;
+  }catch(e){ return null; }
+}
+
+function getAlpacaCreds(){
+  try{
+    const raw = window.localStorage.getItem('blotter_v1:alpaca_creds');
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+function saveAlpacaCreds(keyId, secret){
+  window.localStorage.setItem('blotter_v1:alpaca_creds', JSON.stringify({keyId, secret}));
+}
+function clearAlpacaCreds(){
+  window.localStorage.removeItem('blotter_v1:alpaca_creds');
+}
+
+async function lookupPrice(symbol){
+  const creds = getAlpacaCreds();
+  if(!creds || !creds.keyId || !creds.secret){
+    throw new Error('No Alpaca API key set — add one in Settings first.');
+  }
+  if(isOptionSymbol(symbol)){
+    throw new Error('Alpaca\'s free equities data does not cover options contracts — enter the premium manually.');
+  }
+  let response;
+  try{
+    response = await fetch('https://data.alpaca.markets/v2/stocks/' + encodeURIComponent(symbol) + '/trades/latest', {
+      headers: {
+        'APCA-API-KEY-ID': creds.keyId,
+        'APCA-API-SECRET-KEY': creds.secret,
+      }
+    });
+  }catch(networkErr){
+    throw new Error('Could not reach Alpaca\'s data API from the browser — this is a known CORS limitation on Alpaca\'s side for data.alpaca.markets, not a problem with your key. See Settings for details.');
+  }
+  if(!response.ok){
+    if(response.status===401 || response.status===403) throw new Error('Alpaca rejected the request (' + response.status + ') — check your API key ID and secret in Settings.');
+    if(response.status===404) throw new Error('Alpaca has no data for "' + symbol + '".');
+    throw new Error('Alpaca request failed (' + response.status + ').');
+  }
+  const data = await response.json();
+  if(!data.trade || data.trade.p===undefined) throw new Error('No trade data returned for ' + symbol + '.');
+  return {symbol, price: data.trade.p, currency: 'USD', asOf: data.trade.t || 'latest'};
+}
+
+// FX rate: Alpaca doesn't provide forex, so this uses Frankfurter (ECB-backed,
+// free, no key required, CORS-enabled) instead. Frankfurter migrated its public
+// API from api.frankfurter.app to api.frankfurter.dev (v2) — the old .app
+// endpoint is no longer reliable, so this uses the current one.
+async function lookupFxRate(){
+  let response;
+  try{
+    response = await fetch('https://api.frankfurter.dev/v2/rate/USD/CAD');
+  }catch(networkErr){
+    throw new Error('Could not reach the FX rate service.');
+  }
+  if(!response.ok) throw new Error('FX lookup failed (' + response.status + ')');
+  const data = await response.json();
+  if(!data.rate) throw new Error('No FX rate returned.');
+  return {usdToCad: data.rate, asOf: data.date || 'latest'};
+}
+
+// Convert a native-currency amount into the chosen display currency.
+function convert(amount, fromCcy, toCcy, usdToCad){
+  if(amount===null || amount===undefined || isNaN(amount)) return null;
+  if(!fromCcy || fromCcy===toCcy) return amount;
+  if(fromCcy==='USD' && toCcy==='CAD') return amount * (usdToCad||1);
+  if(fromCcy==='CAD' && toCcy==='USD') return amount / (usdToCad||1);
+  return amount;
+}
+
+// Realized rows carry both a CAD and USD column already — prefer the native
+// column for the requested display currency, only falling back to the fx
+// rate (e.g. for manual entries that only recorded one side).
+function pickOrConvert(nativeCad, nativeUsd, displayCcy, usdToCad){
+  if(displayCcy === 'CAD'){
+    if(nativeCad!==null && nativeCad!==undefined) return nativeCad;
+    if(nativeUsd!==null && nativeUsd!==undefined) return nativeUsd*(usdToCad||1);
+    return null;
+  } else {
+    if(nativeUsd!==null && nativeUsd!==undefined) return nativeUsd;
+    if(nativeCad!==null && nativeCad!==undefined) return nativeCad/(usdToCad||1);
+    return null;
+  }
+}
+
+// Classify a symbol/name as an option or a regular stock/ETF (2x leveraged ETFs
+// count as stocks/ETFs here). Works for imported rows (which carry secType) and
+// for realized-trade or manual rows that only have symbol/name.
+function isOptionSymbol(symbol){
+  if(!symbol) return false;
+  const compact = symbol.replace(/\s+/g,'');
+  // OCC-style: SYMBOL + 6-digit date + C/P + strike digits, e.g. AVGO260918C00450000
+  if(/^[A-Z.]{1,6}\d{6}[CP]\d{5,8}$/.test(compact)) return true;
+  // Manual "TSLA 18SEP26 300C" style: ends in number(s)+C/P and contains a date-like token
+  if(/\d[CP]$/.test(symbol.trim()) && /\d{1,2}[A-Z]{3}\d{2}/.test(compact)) return true;
+  return false;
+}
+function classifyAsset(row){
+  if(row.secType === 'OPTION' || isOptionSymbol(row.symbol)) return 'OPTION';
+  return 'STOCK';
+}
+
+const MONTH_ABBR = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
+// Extracts the expiry date (YYYY-MM-DD) from an option symbol, whether it's
+// OCC-style from an import (e.g. "META  270115C00750000") or the manual
+// "TSLA 18SEP26 300C" format built by the Log a trade form. Returns null if
+// the symbol isn't an option or doesn't parse.
+function parseOptionExpiry(symbol){
+  if(!symbol) return null;
+  const compact = symbol.replace(/\s+/g,'');
+  let m = compact.match(/^[A-Z.]{1,6}(\d{2})(\d{2})(\d{2})[CP]\d{5,8}$/);
+  if(m){
+    const yy = parseInt(m[1],10), mm = parseInt(m[2],10), dd = parseInt(m[3],10);
+    if(mm>=1 && mm<=12 && dd>=1 && dd<=31){
+      return (2000+yy) + '-' + String(mm).padStart(2,'0') + '-' + String(dd).padStart(2,'0');
+    }
+  }
+  m = compact.match(/(\d{1,2})([A-Z]{3})(\d{2})\d*[CP]$/);
+  if(m && MONTH_ABBR.hasOwnProperty(m[2])){
+    const dd = parseInt(m[1],10), mon = MONTH_ABBR[m[2]], yy = parseInt(m[3],10);
+    const d = new Date(2000+yy, mon, dd);
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  }
+  return null;
+}
+
+const ASSET_FILTERS = [
+  {id:'ALL', label:'All'},
+  {id:'STOCK', label:'Stocks / ETFs'},
+  {id:'OPTION', label:'Options'},
+];
+
+const TIME_FILTERS = [
+  {id:'ALL', label:'All time'},
+  {id:'1D', label:'1D'},
+  {id:'1W', label:'1W'},
+  {id:'1M', label:'1M'},
+  {id:'3M', label:'3M'},
+  {id:'6M', label:'6M'},
+  {id:'YTD', label:'YTD'},
+  {id:'1Y', label:'1Y'},
+];
+
+// Returns a cutoff Date for a time-filter id, or null for 'ALL' (no cutoff).
+// Filters by the date a trade actually closed, since that's the only dated
+// history we have — there's no daily portfolio-value snapshot to filter open
+// holdings by, so this only applies to closed trades (History / Stats) and to
+// the reconstructed equity curve (Overview).
+function timeFilterCutoff(id){
+  const now = new Date();
+  if(id === 'ALL') return null;
+  if(id === 'YTD') return new Date(now.getFullYear(), 0, 1);
+  const d = new Date(now);
+  if(id === '1D') d.setDate(d.getDate()-1);
+  else if(id === '1W') d.setDate(d.getDate()-7);
+  else if(id === '1M') d.setMonth(d.getMonth()-1);
+  else if(id === '3M') d.setMonth(d.getMonth()-3);
+  else if(id === '6M') d.setMonth(d.getMonth()-6);
+  else if(id === '1Y') d.setFullYear(d.getFullYear()-1);
+  return d;
+}
+function withinTimeFilter(dateStr, timeFilter){
+  if(timeFilter === 'ALL' || !dateStr) return true;
+  const cutoff = timeFilterCutoff(timeFilter);
+  return dateStr >= cutoff.toISOString().slice(0,10);
+}
+
+// Net money actually deposited into an account (deposits minus withdrawals),
+// as distinct from cost basis — cost basis double-counts capital that gets
+// bought, sold, and reused across multiple trades.
+function computeNetDeposits(activity, displayCcy, usdToCad){
+  return (activity||[]).filter(a=>a.type==='MoneyMovement').reduce((s,a)=>s+(convert(a.netCash,a.ccy,displayCcy,usdToCad)||0),0);
+}
+
+// ---------- Main App ----------
+
+function App(){
+  const [accounts, setAccounts] = useState([]);
+  const [activeAccountId, setActiveAccountId] = useState(null); // account id, or 'ALL'
+  const [tab, setTab] = useState('overview');
+  const [data, setData] = useState({}); // { [accountId]: {holdings, realized, activity} }
+  const [loaded, setLoaded] = useState(false);
+  const [displayCcy, setDisplayCcy] = useState('CAD');
+  const [fxRate, setFxRate] = useState(1.38);
+  const [fxAsOf, setFxAsOf] = useState(null);
+  const [fxLoading, setFxLoading] = useState(false);
+  const [fxError, setFxError] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      let accts = await storageGet('blotter:accounts');
+      accts = accts ? JSON.parse(accts) : [];
+      const dataMap = {};
+      if(accts.length === 0){
+        const seeds = [SEED_ACCOUNT_1, SEED_ACCOUNT_2];
+        accts = [];
+        for(const seed of seeds){
+          const id = uid();
+          accts.push({id, name: seed.name});
+          dataMap[id] = {
+            holdings: seed.holdings,
+            realized: seed.realized,
+            activity: seed.activity,
+            cash: seed.cash || [],
+          };
+          await storageSet('blotter:holdings:'+id, JSON.stringify(seed.holdings));
+          await storageSet('blotter:realized:'+id, JSON.stringify(seed.realized));
+          await storageSet('blotter:activity:'+id, JSON.stringify(seed.activity));
+          await storageSet('blotter:cash:'+id, JSON.stringify(seed.cash || []));
+        }
+        await storageSet('blotter:accounts', JSON.stringify(accts));
+      } else {
+        const knownSeeds = {[SEED_ACCOUNT_1.name]: SEED_ACCOUNT_1.cash, [SEED_ACCOUNT_2.name]: SEED_ACCOUNT_2.cash};
+        for(const a of accts){
+          const h = await storageGet('blotter:holdings:'+a.id);
+          const r = await storageGet('blotter:realized:'+a.id);
+          const act = await storageGet('blotter:activity:'+a.id);
+          const c = await storageGet('blotter:cash:'+a.id);
+          let cashVal;
+          if(c){
+            cashVal = JSON.parse(c);
+          } else {
+            // Backfill: this account was saved before cash tracking existed.
+            // If its name matches one of the original seed accounts, restore its cash.
+            cashVal = knownSeeds[a.name] || [];
+            await storageSet('blotter:cash:'+a.id, JSON.stringify(cashVal));
+          }
+          dataMap[a.id] = {
+            holdings: h ? JSON.parse(h) : [],
+            realized: r ? JSON.parse(r) : [],
+            activity: act ? JSON.parse(act) : [],
+            cash: cashVal,
+          };
+        }
+      }
+      const storedFx = await storageGet('blotter:fxrate');
+      if(storedFx){
+        try{
+          const parsedFx = JSON.parse(storedFx);
+          if(parsedFx.rate){ setFxRate(parsedFx.rate); setFxAsOf(parsedFx.asOf); }
+        }catch(e){}
+      }
+      setAccounts(accts);
+      setActiveAccountId('ALL');
+      setData(dataMap);
+      setLoaded(true);
+      // Fetch a fresh FX rate in the background so the toggle has a real number quickly.
+      doRefreshFx();
+    })();
+  }, []);
+
+  async function doRefreshFx(){
+    setFxLoading(true); setFxError('');
+    try{
+      const r = await lookupFxRate();
+      setFxRate(r.usdToCad);
+      setFxAsOf(r.asOf);
+      await storageSet('blotter:fxrate', JSON.stringify({rate:r.usdToCad, asOf:r.asOf}));
+    }catch(e){
+      setFxError('Could not refresh the FX rate: ' + e.message);
+    }
+    setFxLoading(false);
+  }
+
+  async function updateAccountData(id, patch){
+    setData(prev => ({...prev, [id]: {...prev[id], ...patch}}));
+    const jobs = [];
+    if(patch.holdings !== undefined) jobs.push(storageSet('blotter:holdings:'+id, JSON.stringify(patch.holdings)));
+    if(patch.realized !== undefined) jobs.push(storageSet('blotter:realized:'+id, JSON.stringify(patch.realized)));
+    if(patch.activity !== undefined) jobs.push(storageSet('blotter:activity:'+id, JSON.stringify(patch.activity)));
+    if(patch.cash !== undefined) jobs.push(storageSet('blotter:cash:'+id, JSON.stringify(patch.cash)));
+    await Promise.all(jobs);
+  }
+
+  async function addAccount(){
+    const name = prompt('Name this account (e.g. "TFSA" or "Margin"):');
+    if(!name) return;
+    const id = uid();
+    const next = [...accounts, {id, name}];
+    setAccounts(next);
+    setData(prev => ({...prev, [id]: {holdings:[], realized:[], activity:[], cash:[]}}));
+    setActiveAccountId(id);
+    await storageSet('blotter:accounts', JSON.stringify(next));
+  }
+
+  async function renameOrRemoveAccount(id){
+    const acc = accounts.find(a=>a.id===id);
+    const action = prompt('Type a new name for "'+acc.name+'", or type DELETE to remove this account:', acc.name);
+    if(action === null) return;
+    if(action.trim().toUpperCase() === 'DELETE'){
+      if(!confirm('Remove "'+acc.name+'" and all its data? This cannot be undone.')) return;
+      const next = accounts.filter(a=>a.id!==id);
+      setAccounts(next);
+      await storageSet('blotter:accounts', JSON.stringify(next));
+      await storageSet('blotter:holdings:'+id, JSON.stringify([]));
+      await storageSet('blotter:realized:'+id, JSON.stringify([]));
+      await storageSet('blotter:activity:'+id, JSON.stringify([]));
+      await storageSet('blotter:cash:'+id, JSON.stringify([]));
+      if(activeAccountId === id) setActiveAccountId('ALL');
+    } else if(action.trim()){
+      const next = accounts.map(a => a.id===id ? {...a, name:action.trim()} : a);
+      setAccounts(next);
+      await storageSet('blotter:accounts', JSON.stringify(next));
+    }
+  }
+
+  if(!loaded){
+    return <div style={{padding:'40px', color:'var(--ink-faint)', fontFamily:'var(--mono)'}}>Loading blotter…</div>;
+  }
+
+  const combinedData = accounts.reduce((acc, a) => {
+    const d = data[a.id] || {holdings:[], realized:[], activity:[], cash:[]};
+    (d.holdings||[]).forEach(h => acc.holdings.push({...h, accountName:a.name, accountId:a.id}));
+    (d.realized||[]).forEach(r => acc.realized.push({...r, accountName:a.name, accountId:a.id}));
+    (d.activity||[]).forEach(x => acc.activity.push({...x, accountName:a.name, accountId:a.id}));
+    (d.cash||[]).forEach(c => acc.cash.push({...c, accountName:a.name, accountId:a.id}));
+    return acc;
+  }, {holdings:[], realized:[], activity:[], cash:[]});
+
+  const isAll = activeAccountId === 'ALL';
+  const activeData = isAll ? combinedData : (data[activeAccountId] || {holdings:[], realized:[], activity:[], cash:[]});
+  const activeAccountObj = isAll ? {id:'ALL', name:'All accounts'} : accounts.find(a=>a.id===activeAccountId);
+
+  function acctTotalRealizedCad(d){ return (d.realized||[]).reduce((s,r)=>s+(r.realizedCad||0),0); }
+
+  return (
+    <div id="app">
+      <div className="rail">
+        <div className="brand"><span className="mark">▤</span> Blotter</div>
+        <div>
+          <div className="rail-section-label">Accounts</div>
+          <div className="acct-list">
+            <button
+              className={"acct-btn all-accounts" + (isAll ? " active":"")}
+              onClick={()=>setActiveAccountId('ALL')}>
+              <span>All accounts</span>
+              <span className={"pl " + plClass(acctTotalRealizedCad(combinedData))}>{combinedData.realized.length ? fmt(acctTotalRealizedCad(combinedData),0) : ''}</span>
+            </button>
+            {accounts.map(a => {
+              const d = data[a.id] || {realized:[]};
+              const tot = acctTotalRealizedCad(d);
+              return (
+                <button key={a.id}
+                  className={"acct-btn" + (a.id===activeAccountId ? " active":"")}
+                  onClick={()=>setActiveAccountId(a.id)}
+                  onDoubleClick={()=>renameOrRemoveAccount(a.id)}
+                  title="Double-click to rename or delete">
+                  <span>{a.name}</span>
+                  <span className={"pl " + plClass(tot)}>{tot?fmt(tot,0):''}</span>
+                </button>
+              );
+            })}
+            <button className="add-acct" onClick={addAccount}>+ Add account</button>
+          </div>
+        </div>
+        <nav className="tabs">
+          <div className="rail-section-label">View</div>
+          {TABS.map(t => (
+            <button key={t.id} className={tab===t.id?'active':''} onClick={()=>setTab(t.id)}>{t.label}</button>
+          ))}
+        </nav>
+      </div>
+
+      <main>
+        <div className="mobile-tabs">
+          {TABS.map(t => (
+            <button key={t.id} className={tab===t.id?'active':''} onClick={()=>setTab(t.id)}>{t.label}</button>
+          ))}
+        </div>
+
+        {(tab==='overview' || tab==='holdings' || tab==='history' || tab==='stats' || tab==='sizer') && (
+          <CurrencyBar displayCcy={displayCcy} setDisplayCcy={setDisplayCcy} fxRate={fxRate} fxAsOf={fxAsOf} fxLoading={fxLoading} fxError={fxError} onRefresh={doRefreshFx} />
+        )}
+
+        {tab==='overview' && <Overview accounts={accounts} data={data} displayCcy={displayCcy} fxRate={fxRate} />}
+        {tab==='holdings' && <Holdings account={activeAccountObj} combined={isAll} d={activeData} displayCcy={displayCcy} fxRate={fxRate} dataByAccount={data} updateAccount={updateAccountData} />}
+        {tab==='history' && <History account={activeAccountObj} combined={isAll} d={activeData} displayCcy={displayCcy} fxRate={fxRate} dataByAccount={data} updateAccount={updateAccountData} />}
+        {tab==='stats' && <Stats account={activeAccountObj} d={activeData} displayCcy={displayCcy} fxRate={fxRate} />}
+        {tab==='sizer' && (isAll
+          ? <PickAccountNotice accounts={accounts} onPick={setActiveAccountId} action="size a trade" />
+          : <PositionSizer account={activeAccountObj} d={activeData} displayCcy={displayCcy} fxRate={fxRate} />)}
+        {tab==='log' && (isAll
+          ? <PickAccountNotice accounts={accounts} onPick={setActiveAccountId} action="log a trade" />
+          : <LogTrade account={activeAccountObj} d={activeData} onUpdate={p=>updateAccountData(activeAccountId,p)} />)}
+        {tab==='import' && (isAll
+          ? <PickAccountNotice accounts={accounts} onPick={setActiveAccountId} action="import a CSV" />
+          : <Import account={activeAccountObj} d={activeData} onUpdate={p=>updateAccountData(activeAccountId,p)} />)}
+        {tab==='settings' && <Settings />}
+      </main>
+    </div>
+  );
+}
+
+function CurrencyBar({displayCcy, setDisplayCcy, fxRate, fxAsOf, fxLoading, fxError, onRefresh}){
+  return (
+    <div className="ccy-bar">
+      <div className="toggle-row ccy-toggle">
+        <button className={displayCcy==='CAD'?'active':''} onClick={()=>setDisplayCcy('CAD')} type="button">CAD</button>
+        <button className={displayCcy==='USD'?'active':''} onClick={()=>setDisplayCcy('USD')} type="button">USD</button>
+      </div>
+      <div className="fx-note">
+        {fxLoading && !fxRate ? 'Fetching exchange rate…' : ('1 USD ≈ ' + fmt(fxRate,4) + ' CAD')}
+        {fxAsOf ? (' · as of ' + fxAsOf) : ''}
+        <button className="linklike fx-refresh" onClick={onRefresh} disabled={fxLoading} type="button">
+          {fxLoading ? <span className="spinner"></span> : 'Refresh rate'}
+        </button>
+      </div>
+      {fxError && <div className="hint err">{fxError}</div>}
+    </div>
+  );
+}
+
+function PickAccountNotice({accounts, onPick, action}){
+  return (
+    <div>
+      <h1 className="page-title">Pick an account</h1>
+      <p className="page-sub">"All accounts" is a combined view — to {action}, choose a specific account first.</p>
+      <div className="acct-list" style={{maxWidth:'260px'}}>
+        {accounts.map(a => (
+          <button key={a.id} className="acct-btn" onClick={()=>onPick(a.id)}>{a.name}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MonthlyPnl({data, displayCcy, fxRate}){
+  const monthly = useMemo(() => {
+    const bins = new Map();
+    Object.values(data).forEach(d => {
+      (d.realized||[]).forEach(r => {
+        if(!r.date) return;
+        const pl = pickOrConvert(r.realizedCad, r.realizedUsd, displayCcy, fxRate);
+        if(pl === null) return;
+        const month = r.date.slice(0,7);
+        bins.set(month, (bins.get(month)||0) + pl);
+      });
+    });
+    return Array.from(bins.entries()).sort((a,b)=>a[0].localeCompare(b[0])).map(([month,pl])=>({month,pl}));
+  }, [data, displayCcy, fxRate]);
+
+  const currentUnrealized = useMemo(() => {
+    let u = 0;
+    Object.values(data).forEach(d => {
+      (d.holdings||[]).forEach(h => { u += convert(h.unrealized, h.unrealizedCcy, displayCcy, fxRate) || 0; });
+    });
+    return u;
+  }, [data, displayCcy, fxRate]);
+
+  const shown = monthly.slice(-24);
+  const totalRealized = monthly.reduce((s,m)=>s+m.pl,0);
+  const maxAbs = Math.max(...shown.map(m=>Math.abs(m.pl)), 1);
+  const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  return (
+    <div style={{marginBottom:'24px'}}>
+      <div className="section-head"><h2>Monthly realized P&amp;L</h2></div>
+      {shown.length === 0 ? (
+        <div className="empty">No closed trades yet to chart.</div>
+      ) : (
+        <React.Fragment>
+        <div style={{background:'var(--panel)', border:'1px solid var(--line)', borderRadius:'var(--radius)', padding:'16px'}}>
+          <div style={{display:'flex', alignItems:'flex-end', gap:'6px', height:'160px'}}>
+            {shown.map(m => {
+              const heightPct = Math.max(2, Math.abs(m.pl)/maxAbs * 100);
+              const isGain = m.pl >= 0;
+              return (
+                <div key={m.month} style={{flex:'1', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', height:'100%', minWidth:'8px'}} title={m.month + ': ' + fmtMoney(m.pl,displayCcy,0)}>
+                  <div style={{width:'100%', maxWidth:'32px', height: heightPct+'%', background: isGain?'var(--gain)':'var(--loss)', borderRadius:'2px 2px 0 0'}}></div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{display:'flex', gap:'6px', marginTop:'6px'}}>
+            {shown.map(m => {
+              const [y,mo] = m.month.split('-');
+              return (
+                <div key={m.month+'l'} style={{flex:'1', textAlign:'center', fontSize:'10px', fontFamily:'var(--mono)', color:'var(--ink-faint)', minWidth:'8px'}}>{MONTH_NAMES[parseInt(mo,10)-1]}</div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="cards" style={{marginTop:'12px'}}>
+          <div className="card"><div className="label">Total realized to date</div><div className={"value "+plClass(totalRealized)}>{fmtMoney(totalRealized,displayCcy,0)}</div></div>
+          <div className="card"><div className="label">Current unrealized (not shown above)</div><div className={"value "+plClass(currentUnrealized)}>{fmtMoney(currentUnrealized,displayCcy,0)}</div></div>
+        </div>
+        <p className="hint" style={{marginTop:'10px'}}>Each bar is your net realized gain or loss for that month — hover a bar for the exact figure. This only covers trades that actually closed; unrealized gains/losses on anything still open are shown separately above, not folded into any month.</p>
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+function Overview({accounts, data, displayCcy, fxRate}){
+  const totals = useMemo(()=>{
+    let realized=0, unrealized=0, marketValue=0, cash=0, openPositions=0, contributions=0;
+    Object.values(data).forEach(d => {
+      (d.realized||[]).forEach(r=>{
+        const v = pickOrConvert(r.realizedCad, r.realizedUsd, displayCcy, fxRate);
+        if(v!==null) realized += v;
+      });
+      (d.holdings||[]).forEach(h=>{
+        openPositions += 1;
+        unrealized += convert(h.unrealized, h.unrealizedCcy, displayCcy, fxRate) || 0;
+        marketValue += convert(h.marketValue, h.marketValueCcy, displayCcy, fxRate) || 0;
+      });
+      (d.cash||[]).forEach(c=>{
+        cash += convert(c.amount, c.ccy, displayCcy, fxRate) || 0;
+      });
+      (d.activity||[]).forEach(a=>{
+        if(a.type === 'MoneyMovement'){
+          contributions += convert(a.netCash, a.ccy, displayCcy, fxRate) || 0;
+        }
+      });
+    });
+    const accountValue = marketValue + cash;
+    const returnPct = contributions > 0 ? ((accountValue - contributions) / contributions) * 100 : null;
+    return {realized, unrealized, marketValue, cash, accountValue, openPositions, total: realized+unrealized, contributions, returnPct};
+  }, [data, displayCcy, fxRate]);
+
+  const hasAnyData = Object.values(data).some(d => (d.holdings||[]).length || (d.realized||[]).length || (d.cash||[]).length);
+  const hasContributions = Object.values(data).some(d => (d.activity||[]).some(a=>a.type==='MoneyMovement'));
+
+  return (
+    <div>
+      <h1 className="page-title">Overview</h1>
+      <p className="page-sub">{accounts.length} account{accounts.length!==1?'s':''} · combined across all accounts</p>
+
+      {!hasAnyData && (
+        <div className="empty">No data yet. Head to <b>Import</b> to load your holdings and trade history CSVs, or <b>Log a trade</b> to start tracking manually.</div>
+      )}
+
+      {hasAnyData && (
+        <React.Fragment>
+        <div className="headline-card">
+          <div className="label">Total P&amp;L — realized + unrealized, {displayCcy}</div>
+          <div className={"headline-value " + plClass(totals.total)}>{fmtMoney(totals.total, displayCcy, 0)}</div>
+        </div>
+
+        <MonthlyPnl data={data} displayCcy={displayCcy} fxRate={fxRate} />
+
+        <div className="cards">
+          <div className="card">
+            <div className="label">Realized</div>
+            <div className={"value " + plClass(totals.realized)}>{fmtMoney(totals.realized,displayCcy,0)}</div>
+          </div>
+          <div className="card">
+            <div className="label">Unrealized</div>
+            <div className={"value " + plClass(totals.unrealized)}>{fmtMoney(totals.unrealized,displayCcy,0)}</div>
+          </div>
+          <div className="card">
+            <div className="label">Account value (holdings + cash)</div>
+            <div className="value">{fmtMoney(totals.accountValue,displayCcy,0)}</div>
+            <div className="sub">{fmtMoney(totals.marketValue,displayCcy,0)} invested · {fmtMoney(totals.cash,displayCcy,0)} cash</div>
+          </div>
+          <div className="card">
+            <div className="label">Open positions</div>
+            <div className="value">{totals.openPositions}</div>
+          </div>
+          {hasContributions && (
+            <React.Fragment>
+            <div className="card">
+              <div className="label">Net contributions</div>
+              <div className="value">{fmtMoney(totals.contributions,displayCcy,0)}</div>
+              <div className="sub">deposits minus withdrawals</div>
+            </div>
+            <div className="card">
+              <div className="label">Return on contributions</div>
+              <div className={"value " + plClass(totals.returnPct)}>{totals.returnPct!==null ? fmt(totals.returnPct,1)+'%' : '—'}</div>
+              <div className="sub">account value vs. money put in</div>
+            </div>
+            </React.Fragment>
+          )}
+        </div>
+
+        <div className="section-head"><h2>By account</h2></div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Account</th><th>Positions</th><th>Realized</th><th>Unrealized</th><th>Cash</th><th>Account value</th>
+            </tr></thead>
+            <tbody>
+              {accounts.map(a=>{
+                const d = data[a.id] || {holdings:[], realized:[], cash:[]};
+                const r = (d.realized||[]).reduce((s,row)=>s+(pickOrConvert(row.realizedCad,row.realizedUsd,displayCcy,fxRate)||0),0);
+                const u = (d.holdings||[]).reduce((s,h)=>s+(convert(h.unrealized,h.unrealizedCcy,displayCcy,fxRate)||0),0);
+                const mv = (d.holdings||[]).reduce((s,h)=>s+(convert(h.marketValue,h.marketValueCcy,displayCcy,fxRate)||0),0);
+                const c = (d.cash||[]).reduce((s,row)=>s+(convert(row.amount,row.ccy,displayCcy,fxRate)||0),0);
+                return (
+                  <tr key={a.id}>
+                    <td className="sym">{a.name}</td>
+                    <td className="num">{(d.holdings||[]).length}</td>
+                    <td className={"num "+plClass(r)}>{fmtMoney(r,displayCcy,0)}</td>
+                    <td className={"num "+plClass(u)}>{fmtMoney(u,displayCcy,0)}</td>
+                    <td className="num">{fmtMoney(c,displayCcy,0)}</td>
+                    <td className="num">{fmtMoney(mv+c,displayCcy,0)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {hasContributions && <p className="hint" style={{marginTop:'10px'}}>Return on contributions is a simple money-weighted estimate (current account value vs. total deposits minus withdrawals) — it doesn't account for when each deposit happened.</p>}
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+function Holdings({account, combined, d, displayCcy, fxRate, dataByAccount, updateAccount}){
+  const [priceLoading, setPriceLoading] = useState(null);
+  const [err, setErr] = useState('');
+  const [search, setSearch] = useState('');
+  const [assetFilter, setAssetFilter] = useState('ALL');
+  const [view, setView] = useState('ALL'); // ALL | EXPIRING
+  const [sortKey, setSortKey] = useState('symbol');
+  const [sortDir, setSortDir] = useState('asc');
+  const holdings = d.holdings || [];
+  const cash = d.cash || [];
+  let totalMv = 0, totalUnreal = 0, totalCash = 0;
+  holdings.forEach(h=>{
+    totalMv += convert(h.marketValue, h.marketValueCcy, displayCcy, fxRate) || 0;
+    totalUnreal += convert(h.unrealized, h.unrealizedCcy, displayCcy, fxRate) || 0;
+  });
+  cash.forEach(c=>{ totalCash += convert(c.amount, c.ccy, displayCcy, fxRate) || 0; });
+
+  function patchHolding(h, patch){
+    const accId = h.accountId || (account && account.id);
+    const accData = dataByAccount[accId] || {holdings:[]};
+    const newHoldings = (accData.holdings||[]).map(x => x.id===h.id ? {...x, ...patch} : x);
+    updateAccount(accId, {holdings: newHoldings});
+  }
+
+  async function refreshPrice(h){
+    setErr(''); setPriceLoading(h.id);
+    try{
+      const p = await lookupPrice(h.symbol);
+      const newPrice = p.price;
+      const newCcy = p.currency || h.marketPriceCcy;
+      const mult = h.secType==='OPTION' ? 100 : 1;
+      const newMv = newPrice * h.qty * mult;
+      const newUnreal = h.avgCost!==null ? (newPrice - h.avgCost) * h.qty * mult : h.unrealized;
+      patchHolding(h, {marketPrice:newPrice, marketPriceCcy:newCcy, marketValue:newMv, marketValueCcy:newCcy, unrealized:newUnreal, unrealizedCcy:newCcy});
+    }catch(e){
+      setErr('Could not refresh ' + h.symbol + ': ' + e.message);
+    }
+    setPriceLoading(null);
+  }
+
+  function toggleSort(key){
+    if(sortKey===key){ setSortDir(d=>d==='asc'?'desc':'asc'); }
+    else { setSortKey(key); setSortDir(key==='dte'?'asc':'asc'); }
+  }
+
+  const withExpiry = holdings.map(h => {
+    const expiry = classifyAsset(h)==='OPTION' ? parseOptionExpiry(h.symbol) : null;
+    return {...h, expiry, dte: expiry!==null ? daysToExpiry(expiry) : null};
+  });
+
+  const expiringOnly = withExpiry.filter(h => h.dte !== null);
+
+  const base = view==='EXPIRING' ? expiringOnly : withExpiry;
+  const filtered = base.filter(h => {
+    if(assetFilter !== 'ALL' && classifyAsset(h) !== assetFilter) return false;
+    if(!search.trim()) return true;
+    const s = search.trim().toLowerCase();
+    return h.symbol.toLowerCase().includes(s) || (h.name||'').toLowerCase().includes(s);
+  });
+  const effectiveSortKey = view==='EXPIRING' ? 'dte' : sortKey;
+  const effectiveSortDir = view==='EXPIRING' ? 'asc' : sortDir;
+  const sorted = filtered.slice().sort((a,b)=>{
+    let av, bv;
+    if(effectiveSortKey==='symbol'){ av=a.symbol; bv=b.symbol; }
+    else if(effectiveSortKey==='marketValue'){ av=convert(a.marketValue,a.marketValueCcy,displayCcy,fxRate)||0; bv=convert(b.marketValue,b.marketValueCcy,displayCcy,fxRate)||0; }
+    else if(effectiveSortKey==='unrealized'){ av=convert(a.unrealized,a.unrealizedCcy,displayCcy,fxRate)||0; bv=convert(b.unrealized,b.unrealizedCcy,displayCcy,fxRate)||0; }
+    else if(effectiveSortKey==='dte'){ av = a.dte===null?Infinity:a.dte; bv = b.dte===null?Infinity:b.dte; }
+    if(typeof av==='string'){ const c = av.localeCompare(bv); return effectiveSortDir==='asc'?c:-c; }
+    return effectiveSortDir==='asc' ? av-bv : bv-av;
+  });
+
+  function holdingReturnPct(h){
+    const costBasis = (h.marketValue||0) - (h.unrealized||0);
+    return costBasis !== 0 ? ((h.unrealized||0)/costBasis)*100 : null;
+  }
+  const filteredMv = sorted.reduce((s,h)=>s+(convert(h.marketValue,h.marketValueCcy,displayCcy,fxRate)||0),0);
+  const filteredUnreal = sorted.reduce((s,h)=>s+(convert(h.unrealized,h.unrealizedCcy,displayCcy,fxRate)||0),0);
+  const filteredCost = filteredMv - filteredUnreal;
+  const filteredReturnPct = filteredCost !== 0 ? (filteredUnreal/filteredCost)*100 : null;
+
+  return (
+    <div>
+      <h1 className="page-title">Holdings</h1>
+      <p className="page-sub">{account ? account.name : ''} · current open positions · shown in {displayCcy}</p>
+
+      {holdings.length===0 && cash.length===0 ? (
+        <div className="empty">No holdings on file for this account yet. Import a holdings CSV, or log a buy manually.</div>
+      ) : (
+        <React.Fragment>
+        <div className="toggle-row" style={{maxWidth:'420px'}}>
+          <button className={view==='ALL'?'active':''} onClick={()=>setView('ALL')} type="button">All holdings</button>
+          <button className={view==='EXPIRING'?'active':''} onClick={()=>setView('EXPIRING')} type="button">Expiring contracts{expiringOnly.length?' ('+expiringOnly.length+')':''}</button>
+        </div>
+        <div className="toggle-row" style={{maxWidth:'520px'}}>
+          {ASSET_FILTERS.map(f => (
+            <button key={f.id} className={assetFilter===f.id?'active':''} onClick={()=>setAssetFilter(f.id)} type="button">{f.label}</button>
+          ))}
+        </div>
+        {view==='EXPIRING' && expiringOnly.length===0 && (
+          <div className="empty" style={{marginBottom:'16px'}}>No open contracts with a parseable expiry date in this account.</div>
+        )}
+        <div className="cards">
+          <div className="card">
+            <div className="label">Market value ({displayCcy})</div>
+            <div className="value">{fmtMoney(sorted.reduce((s,h)=>s+(convert(h.marketValue,h.marketValueCcy,displayCcy,fxRate)||0),0),displayCcy,0)}</div>
+          </div>
+          <div className="card">
+            <div className="label">Cash ({displayCcy})</div>
+            <div className="value">{fmtMoney(totalCash,displayCcy,0)}</div>
+          </div>
+          <div className="card">
+            <div className="label">Account value ({displayCcy})</div>
+            <div className="value">{fmtMoney(totalMv+totalCash,displayCcy,0)}</div>
+          </div>
+          <div className="card">
+            <div className="label">Unrealized P&amp;L ({displayCcy})</div>
+            <div className={"value "+plClass(filteredUnreal)}>{fmtMoney(filteredUnreal,displayCcy,0)}</div>
+          </div>
+          <div className="card">
+            <div className="label">Unrealized return</div>
+            <div className={"value "+plClass(filteredReturnPct)}>{filteredReturnPct!==null?fmt(filteredReturnPct,1)+'%':'—'}</div>
+            <div className="sub">unrealized ÷ cost basis of these positions</div>
+          </div>
+        </div>
+        <p className="hint" style={{marginBottom:'16px'}}>This only covers your currently open positions — gains already banked from closed trades aren't included, so it's normal for this to read negative even when you're up all-time. See Overview for your combined realized + unrealized performance.</p>
+        {cash.length>0 && (
+          <div className="table-wrap" style={{marginBottom:'16px'}}>
+            <table>
+              <thead><tr>{combined && <th>Account</th>}<th>Cash balance</th><th>Amount</th><th>In {displayCcy}</th></tr></thead>
+              <tbody>
+                {cash.map((c,i)=>(
+                  <tr key={'cash'+i}>
+                    {combined && <td className="name">{c.accountName}</td>}
+                    <td className="sym">{c.ccy}</td>
+                    <td className="num">{fmtMoney(c.amount,c.ccy)}</td>
+                    <td className="num">{fmtMoney(convert(c.amount,c.ccy,displayCcy,fxRate),displayCcy)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {err && <div className="hint err" style={{marginBottom:'10px'}}>{err}</div>}
+
+        <div className="filter-row">
+          <input className="search-input" placeholder="Search symbol or name…" value={search} onChange={e=>setSearch(e.target.value)} />
+          <div className="sort-controls">
+            <span className="hint" style={{margin:0}}>Sort:</span>
+            <button className={"btn secondary sm"+(sortKey==='symbol'?' active':'')} onClick={()=>toggleSort('symbol')} disabled={view==='EXPIRING'}>Symbol{sortKey==='symbol'?(sortDir==='asc'?' ↑':' ↓'):''}</button>
+            <button className={"btn secondary sm"+(sortKey==='marketValue'?' active':'')} onClick={()=>toggleSort('marketValue')} disabled={view==='EXPIRING'}>Value{sortKey==='marketValue'?(sortDir==='asc'?' ↑':' ↓'):''}</button>
+            <button className={"btn secondary sm"+(sortKey==='unrealized'?' active':'')} onClick={()=>toggleSort('unrealized')} disabled={view==='EXPIRING'}>Unrealized{sortKey==='unrealized'?(sortDir==='asc'?' ↑':' ↓'):''}</button>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead><tr>
+              {combined && <th>Account</th>}
+              <th>Symbol</th><th>Name</th><th>Qty</th><th>Expiry</th><th>DTE</th><th>Avg cost</th><th>Price</th><th>Market value</th><th>Unrealized</th><th>Unrealized %</th><th>Notes</th>
+              {!combined && <th></th>}
+            </tr></thead>
+            <tbody>
+              {sorted.map(h=>(
+                <tr key={h.id + (h.accountId||'')}>
+                  {combined && <td className="name">{h.accountName}</td>}
+                  <td className="sym">{h.symbol}{h.secType==='OPTION' && <span className="badge" style={{marginLeft:'6px'}}>OPT</span>}</td>
+                  <td className="name">{h.name}</td>
+                  <td className="num">{fmt(h.qty,0)}</td>
+                  <td className="num">{h.expiry||'—'}</td>
+                  <td className={"num"+(h.dte!==null && h.dte<=7?' loss':(h.dte!==null && h.dte<=30?'':''))} style={h.dte!==null && h.dte>7 && h.dte<=30?{color:'var(--brass)'}:undefined}>{h.dte!==null?h.dte+'d':'—'}</td>
+                  <td className="num">{fmtMoney(convert(h.avgCost,h.marketValueCcy,displayCcy,fxRate),displayCcy)}</td>
+                  <td className="num">{fmtMoney(convert(h.marketPrice,h.marketPriceCcy,displayCcy,fxRate),displayCcy)}</td>
+                  <td className="num">{fmtMoney(convert(h.marketValue,h.marketValueCcy,displayCcy,fxRate),displayCcy)}</td>
+                  <td className={"num "+plClass(h.unrealized)}>{fmtMoney(convert(h.unrealized,h.unrealizedCcy,displayCcy,fxRate),displayCcy)}</td>
+                  <td className={"num "+plClass(holdingReturnPct(h))}>{holdingReturnPct(h)!==null?fmt(holdingReturnPct(h),1)+'%':'—'}</td>
+                  <td>
+                    <input className="notes-input" defaultValue={h.notes||''} placeholder="—"
+                      onBlur={e=>{ if(e.target.value !== (h.notes||'')) patchHolding(h, {notes:e.target.value}); }} />
+                  </td>
+                  {!combined && (
+                    <td>
+                      <button className="btn secondary sm" disabled={priceLoading===h.id} onClick={()=>refreshPrice(h)}>
+                        {priceLoading===h.id ? <span className="spinner"></span> : 'Refresh price'}
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+function History({account, combined, d, displayCcy, fxRate, dataByAccount, updateAccount}){
+  const [search, setSearch] = useState('');
+  const [assetFilter, setAssetFilter] = useState('ALL');
+  const [timeFilter, setTimeFilter] = useState('ALL');
+  const [sortKey, setSortKey] = useState('date');
+  const [sortDir, setSortDir] = useState('desc');
+  const all = d.realized || [];
+
+  function patchRealized(r, patch){
+    const accId = r.accountId || (account && account.id);
+    const accData = dataByAccount[accId] || {realized:[]};
+    const newRealized = (accData.realized||[]).map(x => x.id===r.id ? {...x, ...patch} : x);
+    updateAccount(accId, {realized: newRealized});
+  }
+
+  function toggleSort(key){
+    if(sortKey===key){ setSortDir(dd=>dd==='asc'?'desc':'asc'); }
+    else { setSortKey(key); setSortDir(key==='date'?'desc':'asc'); }
+  }
+
+  const filtered = all.filter(r => {
+    if(assetFilter !== 'ALL' && classifyAsset(r) !== assetFilter) return false;
+    if(!withinTimeFilter(r.date, timeFilter)) return false;
+    if(!search.trim()) return true;
+    const s = search.trim().toLowerCase();
+    return r.symbol.toLowerCase().includes(s) || (r.name||'').toLowerCase().includes(s);
+  });
+  const realized = filtered.slice().sort((a,b)=>{
+    let av, bv;
+    if(sortKey==='date'){ av=a.date||''; bv=b.date||''; }
+    else if(sortKey==='symbol'){ av=a.symbol; bv=b.symbol; }
+    else if(sortKey==='realized'){ av=pickOrConvert(a.realizedCad,a.realizedUsd,displayCcy,fxRate)||0; bv=pickOrConvert(b.realizedCad,b.realizedUsd,displayCcy,fxRate)||0; }
+    if(typeof av==='string'){ const c = av.localeCompare(bv); return sortDir==='asc'?c:-c; }
+    return sortDir==='asc' ? av-bv : bv-av;
+  });
+  const total = realized.reduce((s,r)=>s+(pickOrConvert(r.realizedCad,r.realizedUsd,displayCcy,fxRate)||0),0);
+  const totalCostBasis = realized.reduce((s,r)=>s+Math.abs(pickOrConvert(r.initialInvCad,r.initialInvUsd,displayCcy,fxRate)||0),0);
+  const totalProceeds = realized.reduce((s,r)=>s+(pickOrConvert(r.netProceedsCad,r.netProceedsUsd,displayCcy,fxRate)||0),0);
+  const totalReturnPct = totalCostBasis !== 0 ? (total/totalCostBasis)*100 : null;
+  const netDeposits = computeNetDeposits(d.activity, displayCcy, fxRate);
+  const netDepositReturnPct = netDeposits > 0 ? (total/netDeposits)*100 : null;
+
+  return (
+    <div>
+      <h1 className="page-title">Trade history</h1>
+      <p className="page-sub">{account?account.name:''} · closed / realized trades · shown in {displayCcy}</p>
+      {all.length===0 ? (
+        <div className="empty">No realized trades yet for this account. Import a realized gain/loss report, or log a sell.</div>
+      ) : (
+        <React.Fragment>
+        <div className="toggle-row" style={{maxWidth:'420px'}}>
+          {TIME_FILTERS.map(f => (
+            <button key={f.id} className={timeFilter===f.id?'active':''} onClick={()=>setTimeFilter(f.id)} type="button">{f.label}</button>
+          ))}
+        </div>
+        <div className="toggle-row" style={{maxWidth:'520px'}}>
+          {ASSET_FILTERS.map(f => (
+            <button key={f.id} className={assetFilter===f.id?'active':''} onClick={()=>setAssetFilter(f.id)} type="button">{f.label}</button>
+          ))}
+        </div>
+
+        <div className="cards">
+          <div className="card"><div className="label">Closed trades</div><div className="value">{realized.length}</div></div>
+          <div className="card"><div className="label">Risked (cost basis, per trade, summed)</div><div className="value">{fmtMoney(totalCostBasis,displayCcy,0)}</div></div>
+          <div className="card"><div className="label">Returned (proceeds)</div><div className="value">{fmtMoney(totalProceeds,displayCcy,0)}</div></div>
+          <div className="card">
+            <div className="label">Profit</div>
+            <div className={"value "+plClass(total)}>{fmtMoney(total,displayCcy,0)}</div>
+            <div className="sub">{totalReturnPct!==null?fmt(totalReturnPct,1)+'% of risked':''}</div>
+          </div>
+          <div className="card"><div className="label">Deposited</div><div className="value">{fmtMoney(netDeposits,displayCcy,0)}</div></div>
+          <div className="card">
+            <div className="label">Profit vs. deposits</div>
+            <div className={"value "+plClass(total)}>{fmtMoney(total,displayCcy,0)}</div>
+            <div className="sub">{netDepositReturnPct!==null?fmt(netDepositReturnPct,1)+'% of deposits':''}</div>
+          </div>
+        </div>
+
+        <div className="filter-row">
+          <input className="search-input" placeholder="Search symbol or name…" value={search} onChange={e=>setSearch(e.target.value)} />
+          <div className="sort-controls">
+            <span className="hint" style={{margin:0}}>Sort:</span>
+            <button className={"btn secondary sm"+(sortKey==='date'?' active':'')} onClick={()=>toggleSort('date')}>Date{sortKey==='date'?(sortDir==='asc'?' ↑':' ↓'):''}</button>
+            <button className={"btn secondary sm"+(sortKey==='symbol'?' active':'')} onClick={()=>toggleSort('symbol')}>Symbol{sortKey==='symbol'?(sortDir==='asc'?' ↑':' ↓'):''}</button>
+            <button className={"btn secondary sm"+(sortKey==='realized'?' active':'')} onClick={()=>toggleSort('realized')}>Realized{sortKey==='realized'?(sortDir==='asc'?' ↑':' ↓'):''}</button>
+          </div>
+        </div>
+
+        {realized.length===0 ? (
+          <div className="empty">No trades match this filter.</div>
+        ) : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Date</th>{combined && <th>Account</th>}<th>Symbol</th><th>Name</th><th>Proceeds</th><th>Cost</th><th>Realized</th><th>Return</th><th>Notes</th>
+            </tr></thead>
+            <tbody>
+              {realized.map(r=>{
+                const proceeds = pickOrConvert(r.netProceedsCad, r.netProceedsUsd, displayCcy, fxRate);
+                const cost = pickOrConvert(r.initialInvCad, r.initialInvUsd, displayCcy, fxRate);
+                const gain = pickOrConvert(r.realizedCad, r.realizedUsd, displayCcy, fxRate);
+                const returnPct = (cost && cost!==0) ? (gain/Math.abs(cost))*100 : null;
+                return (
+                  <tr key={r.id + (r.accountId||'')}>
+                    <td>{r.date}</td>
+                    {combined && <td className="name">{r.accountName}</td>}
+                    <td className="sym">{r.symbol}</td>
+                    <td className="name">{r.name}</td>
+                    <td className="num">{fmtMoney(proceeds,'')}</td>
+                    <td className="num">{fmtMoney(cost,'')}</td>
+                    <td className={"num "+plClass(gain)}>{fmtMoney(gain,'')}</td>
+                    <td className={"num "+plClass(returnPct)}>{returnPct!==null?fmt(returnPct,1)+'%':'—'}</td>
+                    <td>
+                      <input className="notes-input" defaultValue={r.notes||''} placeholder="—"
+                        onBlur={e=>{ if(e.target.value !== (r.notes||'')) patchRealized(r, {notes:e.target.value}); }} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        )}
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+function Stats({account, d, displayCcy, fxRate}){
+  const [assetFilter, setAssetFilter] = useState('ALL');
+  const [timeFilter, setTimeFilter] = useState('ALL');
+  const trades = useMemo(() => {
+    const all = d.realized || [];
+    return all.filter(r => (assetFilter==='ALL' || classifyAsset(r)===assetFilter) && withinTimeFilter(r.date, timeFilter));
+  }, [d.realized, assetFilter, timeFilter]);
+  const netDeposits = useMemo(() => computeNetDeposits(d.activity, displayCcy, fxRate), [d.activity, displayCcy, fxRate]);
+  const stats = useMemo(() => {
+    const withPl = trades.map(r => {
+      const pl = pickOrConvert(r.realizedCad, r.realizedUsd, displayCcy, fxRate);
+      const cost = pickOrConvert(r.initialInvCad, r.initialInvUsd, displayCcy, fxRate);
+      const returnPct = (pl!==null && cost && cost!==0) ? (pl/Math.abs(cost))*100 : null;
+      return {...r, pl, returnPct};
+    }).filter(r => r.pl !== null);
+    const wins = withPl.filter(r => r.pl > 0);
+    const losses = withPl.filter(r => r.pl < 0);
+    const flat = withPl.filter(r => r.pl === 0);
+    const sumWins = wins.reduce((s,r)=>s+r.pl,0);
+    const sumLosses = losses.reduce((s,r)=>s+r.pl,0);
+    const totalPl = sumWins + sumLosses;
+    const avgWin = wins.length ? sumWins/wins.length : 0;
+    const avgLoss = losses.length ? sumLosses/losses.length : 0;
+    const winRate = withPl.length ? (wins.length/withPl.length)*100 : 0;
+    const profitFactor = sumLosses !== 0 ? Math.abs(sumWins/sumLosses) : null;
+    const withReturnPct = withPl.filter(r => r.returnPct !== null);
+    const avgReturnPct = withReturnPct.length ? withReturnPct.reduce((s,r)=>s+r.returnPct,0)/withReturnPct.length : null;
+    const totalCostBasis = withPl.reduce((s,r)=>s+Math.abs(pickOrConvert(r.initialInvCad,r.initialInvUsd,displayCcy,fxRate)||0),0);
+    const totalProceeds = withPl.reduce((s,r)=>s+(pickOrConvert(r.netProceedsCad,r.netProceedsUsd,displayCcy,fxRate)||0),0);
+    const aggregateReturnPct = totalCostBasis !== 0 ? (totalPl/totalCostBasis)*100 : null;
+    const netDepositReturnPct = netDeposits > 0 ? (totalPl/netDeposits)*100 : null;
+    const sorted = withPl.slice().sort((a,b)=>b.pl-a.pl);
+    const best = sorted.slice(0,5);
+    const worst = sorted.slice(-5).reverse();
+    const bySymbol = {};
+    withPl.forEach(r => {
+      const cost = Math.abs(pickOrConvert(r.initialInvCad, r.initialInvUsd, displayCcy, fxRate) || 0);
+      if(!bySymbol[r.symbol]) bySymbol[r.symbol] = {symbol: r.symbol, pl: 0, cost: 0, count: 0};
+      bySymbol[r.symbol].pl += r.pl;
+      bySymbol[r.symbol].cost += cost;
+      bySymbol[r.symbol].count += 1;
+    });
+    const symbolRows = Object.values(bySymbol)
+      .map(row => ({...row, returnPct: row.cost !== 0 ? (row.pl/row.cost)*100 : null}))
+      .sort((a,b)=>b.pl-a.pl);
+    return {total: withPl.length, wins, losses, flat, totalPl, avgWin, avgLoss, winRate, profitFactor, avgReturnPct, aggregateReturnPct, netDepositReturnPct, totalCostBasis, totalProceeds, best, worst, symbolRows};
+  }, [trades, displayCcy, fxRate, netDeposits]);
+
+  const hasAnyTrades = (d.realized||[]).length > 0;
+
+  return (
+    <div>
+      <h1 className="page-title">Stats</h1>
+      <p className="page-sub">{account?account.name:''} · performance on closed trades · shown in {displayCcy}</p>
+
+      {hasAnyTrades && (
+        <React.Fragment>
+        <div className="toggle-row" style={{maxWidth:'420px'}}>
+          {TIME_FILTERS.map(f => (
+            <button key={f.id} className={timeFilter===f.id?'active':''} onClick={()=>setTimeFilter(f.id)} type="button">{f.label}</button>
+          ))}
+        </div>
+        <div className="toggle-row" style={{maxWidth:'520px'}}>
+          {ASSET_FILTERS.map(f => (
+            <button key={f.id} className={assetFilter===f.id?'active':''} onClick={()=>setAssetFilter(f.id)} type="button">{f.label}</button>
+          ))}
+        </div>
+        </React.Fragment>
+      )}
+
+      {stats.total===0 ? (
+        <div className="empty">{hasAnyTrades ? 'No closed trades match this filter.' : 'No closed trades yet to compute stats from.'}</div>
+      ) : (
+        <React.Fragment>
+        <div className="headline-card">
+          <div className="label">Total P&amp;L on {stats.total} closed trade{stats.total!==1?'s':''}</div>
+          <div className={"headline-value "+plClass(stats.totalPl)}>{fmtMoney(stats.totalPl,displayCcy,0)}</div>
+        </div>
+        <div className="cards">
+          <div className="card"><div className="label">Win rate</div><div className="value">{fmt(stats.winRate,0)}%</div><div className="sub">{stats.wins.length}W · {stats.losses.length}L{stats.flat.length?(' · '+stats.flat.length+' flat'):''}</div></div>
+          <div className="card"><div className="label">Avg win</div><div className="value gain">{fmtMoney(stats.avgWin,displayCcy,0)}</div></div>
+          <div className="card"><div className="label">Avg loss</div><div className="value loss">{fmtMoney(stats.avgLoss,displayCcy,0)}</div></div>
+          <div className="card"><div className="label">Profit factor</div><div className="value">{stats.profitFactor!==null?fmt(stats.profitFactor,2):'—'}</div><div className="sub">gross wins ÷ gross losses</div></div>
+          <div className="card"><div className="label">Avg return per trade</div><div className={"value "+plClass(stats.avgReturnPct)}>{stats.avgReturnPct!==null?fmt(stats.avgReturnPct,1)+'%':'—'}</div></div>
+          <div className="card"><div className="label">Risked (cost basis, per trade, summed)</div><div className="value">{fmtMoney(stats.totalCostBasis,displayCcy,0)}</div></div>
+          <div className="card"><div className="label">Returned (proceeds)</div><div className="value">{fmtMoney(stats.totalProceeds,displayCcy,0)}</div></div>
+          <div className="card">
+            <div className="label">Profit</div>
+            <div className={"value "+plClass(stats.totalPl)}>{fmtMoney(stats.totalPl,displayCcy,0)}</div>
+            <div className="sub">{stats.aggregateReturnPct!==null?fmt(stats.aggregateReturnPct,1)+'% of risked':''}</div>
+          </div>
+          <div className="card"><div className="label">Deposited</div><div className="value">{fmtMoney(netDeposits,displayCcy,0)}</div></div>
+          <div className="card">
+            <div className="label">Profit vs. deposits</div>
+            <div className={"value "+plClass(stats.totalPl)}>{fmtMoney(stats.totalPl,displayCcy,0)}</div>
+            <div className="sub">{stats.netDepositReturnPct!==null?fmt(stats.netDepositReturnPct,1)+'% of deposits':''}</div>
+          </div>
+        </div>
+        <p className="hint" style={{marginBottom:'16px'}}>"Risked" sums up what was put into each individual trade (its own cost basis), not your whole account — it can add up to more than you've ever deposited, since the same capital gets reused each time you close a trade and open a new one. "Deposited" is the real money you've put into the account all-time instead.</p>
+
+        <div className="section-head"><h2>Best trades</h2></div>
+        <div className="table-wrap" style={{marginBottom:'20px'}}>
+          <table>
+            <thead><tr><th>Date</th><th>Symbol</th><th>Name</th><th>Realized</th><th>Return</th></tr></thead>
+            <tbody>
+              {stats.best.map(r=>(
+                <tr key={'best'+r.id}>
+                  <td>{r.date}</td><td className="sym">{r.symbol}</td><td className="name">{r.name}</td>
+                  <td className={"num "+plClass(r.pl)}>{fmtMoney(r.pl,displayCcy,0)}</td>
+                  <td className={"num "+plClass(r.returnPct)}>{r.returnPct!==null?fmt(r.returnPct,1)+'%':'—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="section-head"><h2>Worst trades</h2></div>
+        <div className="table-wrap" style={{marginBottom:'20px'}}>
+          <table>
+            <thead><tr><th>Date</th><th>Symbol</th><th>Name</th><th>Realized</th><th>Return</th></tr></thead>
+            <tbody>
+              {stats.worst.map(r=>(
+                <tr key={'worst'+r.id}>
+                  <td>{r.date}</td><td className="sym">{r.symbol}</td><td className="name">{r.name}</td>
+                  <td className={"num "+plClass(r.pl)}>{fmtMoney(r.pl,displayCcy,0)}</td>
+                  <td className={"num "+plClass(r.returnPct)}>{r.returnPct!==null?fmt(r.returnPct,1)+'%':'—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="section-head"><h2>By symbol</h2></div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Symbol</th><th>Trades</th><th>Amount put in</th><th>Profit</th><th>Return</th></tr></thead>
+            <tbody>
+              {stats.symbolRows.map(row=>(
+                <tr key={'sym'+row.symbol}>
+                  <td className="sym">{row.symbol}</td>
+                  <td className="num">{row.count}</td>
+                  <td className="num">{fmtMoney(row.cost,displayCcy,0)}</td>
+                  <td className={"num "+plClass(row.pl)}>{fmtMoney(row.pl,displayCcy,0)}</td>
+                  <td className={"num "+plClass(row.returnPct)}>{row.returnPct!==null?fmt(row.returnPct,1)+'%':'—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+function buildOptionSymbol(underlying, expiry, strike, right){
+  if(!underlying || !expiry || !strike) return '';
+  const d = new Date(expiry + 'T00:00:00');
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mon = d.toLocaleString('en-US',{month:'short'}).toUpperCase();
+  const yy = String(d.getFullYear()).slice(2);
+  return underlying.trim().toUpperCase() + ' ' + dd + mon + yy + ' ' + strike + (right==='CALL'?'C':'P');
+}
+
+function daysToExpiry(expiry){
+  if(!expiry) return null;
+  const now = new Date();
+  const exp = new Date(expiry + 'T00:00:00');
+  return Math.round((exp - now) / (1000*60*60*24));
+}
+
+// ---- Black-Scholes pricing (European-style approximation; retail long
+// calls/puts price close enough to this for estimation purposes) ----
+function erf(x){
+  const sign = x < 0 ? -1 : 1;
+  x = Math.abs(x);
+  const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429, p=0.3275911;
+  const t = 1/(1+p*x);
+  const y = 1 - (((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
+  return sign*y;
+}
+function normCDF(x){ return 0.5*(1+erf(x/Math.sqrt(2))); }
+function bsPrice(S, K, T, r, sigma, type){
+  if(T <= 0 || sigma <= 0) return Math.max(0, type==='CALL' ? S-K : K-S);
+  const d1 = (Math.log(S/K) + (r + sigma*sigma/2)*T) / (sigma*Math.sqrt(T));
+  const d2 = d1 - sigma*Math.sqrt(T);
+  return type==='CALL'
+    ? S*normCDF(d1) - K*Math.exp(-r*T)*normCDF(d2)
+    : K*Math.exp(-r*T)*normCDF(-d2) - S*normCDF(-d1);
+}
+function bsDelta(S, K, T, r, sigma, type){
+  if(T <= 0 || sigma <= 0) return type==='CALL' ? (S>K?1:0) : (S<K?-1:0);
+  const d1 = (Math.log(S/K) + (r + sigma*sigma/2)*T) / (sigma*Math.sqrt(T));
+  return type==='CALL' ? normCDF(d1) : normCDF(d1)-1;
+}
+// Solves for the implied volatility that reproduces the given market price,
+// by bisection over a wide vol range — the same quantity your broker's
+// options screen shows as "IV", derived here from your own contract's inputs.
+function impliedVol(price, S, K, T, r, type){
+  if(T <= 0) return null;
+  const intrinsic = Math.max(0, type==='CALL' ? S-K : K-S);
+  if(price <= intrinsic) return 0;
+  let lo = 0.001, hi = 5.0;
+  for(let i=0; i<100; i++){
+    const mid = (lo+hi)/2;
+    const p = bsPrice(S, K, T, r, mid, type);
+    if(p > price) hi = mid; else lo = mid;
+  }
+  return (lo+hi)/2;
+}
+
+function PositionSizer({account, d, displayCcy, fxRate}){
+  const [underlying, setUnderlying] = useState('');
+  const [expiry, setExpiry] = useState('');
+  const [strike, setStrike] = useState('');
+  const [right, setRight] = useState('CALL');
+  const [premium, setPremium] = useState('');
+  const [premiumCcy, setPremiumCcy] = useState('USD');
+  const [riskPct, setRiskPct] = useState('2');
+  const [stopLossPct, setStopLossPct] = useState('100');
+  const [underlyingPrice, setUnderlyingPrice] = useState('');
+  const [priceLoading, setPriceLoading] = useState(false);
+  const [priceMsg, setPriceMsg] = useState(null);
+  const [targetPrice, setTargetPrice] = useState('');
+  const [targetDate, setTargetDate] = useState('');
+  const [ivOverride, setIvOverride] = useState('');
+  const [riskFreeRatePct, setRiskFreeRatePct] = useState('4.5');
+
+  const holdings = d.holdings || [];
+  const cashRows = d.cash || [];
+  const portfolioEquity = holdings.reduce((s,h)=>s+(convert(h.marketValue,h.marketValueCcy,displayCcy,fxRate)||0),0)
+    + cashRows.reduce((s,c)=>s+(convert(c.amount,c.ccy,displayCcy,fxRate)||0),0);
+  const cashAvailable = cashRows.reduce((s,c)=>s+(convert(c.amount,c.ccy,displayCcy,fxRate)||0),0);
+
+  const optionSymbol = buildOptionSymbol(underlying, expiry, strike, right);
+  const dte = daysToExpiry(expiry);
+  const premiumNum = parseFloat(premium);
+  const strikeNum = parseFloat(strike);
+  const riskPctNum = parseFloat(riskPct);
+  const stopLossPctNum = parseFloat(stopLossPct);
+  const underlyingPriceNum = parseFloat(underlyingPrice);
+  const hasInputs = premiumNum > 0 && riskPctNum > 0 && stopLossPctNum > 0;
+
+  function sizeAt(pct){
+    if(!hasInputs) return null;
+    const premiumPerContract = convert(premiumNum, premiumCcy, displayCcy, fxRate) * 100;
+    const maxLossPerContract = premiumPerContract * (stopLossPctNum/100);
+    const maxDollarRisk = portfolioEquity * (pct/100);
+    const contractsByRisk = maxLossPerContract > 0 ? Math.floor(maxDollarRisk / maxLossPerContract) : 0;
+    const contractsByCash = premiumPerContract > 0 ? Math.floor(cashAvailable / premiumPerContract) : 0;
+    const contracts = Math.min(contractsByRisk, contractsByCash);
+    const totalCost = contracts * premiumPerContract;
+    const dollarAtRisk = contracts * maxLossPerContract;
+    const cappedByCash = contractsByCash < contractsByRisk;
+    return {contracts, totalCost, dollarAtRisk, contractsByRisk, contractsByCash, cappedByCash, premiumPerContract};
+  }
+
+  const main = hasInputs ? sizeAt(riskPctNum) : null;
+  const reference = hasInputs ? [1, 2, 5, 10].map(pct => ({pct, ...sizeAt(pct)})) : [];
+
+  // ---- Portfolio heat: total exposure already sitting in open options ----
+  const optionHoldings = holdings.filter(h => classifyAsset(h) === 'OPTION');
+  const currentOptionsExposure = optionHoldings.reduce((s,h)=>s+(convert(h.marketValue,h.marketValueCcy,displayCcy,fxRate)||0),0);
+  const currentHeatPct = portfolioEquity > 0 ? (currentOptionsExposure/portfolioEquity)*100 : null;
+  const projectedExposure = currentOptionsExposure + (main ? main.totalCost : 0);
+  const projectedHeatPct = portfolioEquity > 0 ? (projectedExposure/portfolioEquity)*100 : null;
+
+  // ---- Breakeven & required move ----
+  async function handleLookupUnderlying(){
+    if(!underlying.trim()){ setPriceMsg({type:'err', text:'Enter the underlying ticker first.'}); return; }
+    setPriceLoading(true); setPriceMsg(null);
+    try{
+      const p = await lookupPrice(underlying.trim().toUpperCase());
+      setUnderlyingPrice(String(p.price));
+      if(p.currency) setPremiumCcy(p.currency);
+      setPriceMsg({type:'ok', text: underlying.trim().toUpperCase() + ' trading at ' + fmtMoney(p.price, p.currency||premiumCcy) + ' as of ' + (p.asOf||'now') + '.'});
+    }catch(e){
+      setPriceMsg({type:'err', text:e.message});
+    }
+    setPriceLoading(false);
+  }
+  const hasBreakevenInputs = premiumNum > 0 && strikeNum > 0 && underlyingPriceNum > 0;
+  const breakeven = hasBreakevenInputs ? (right==='CALL' ? strikeNum+premiumNum : strikeNum-premiumNum) : null;
+  const requiredMovePct = (hasBreakevenInputs && underlyingPriceNum>0) ? ((breakeven-underlyingPriceNum)/underlyingPriceNum)*100 : null;
+  const needsToRise = requiredMovePct !== null && requiredMovePct > 0;
+
+  // ---- Implied volatility, solved from your own premium + contract details ----
+  const T = dte !== null && dte > 0 ? dte/365 : 0;
+  const riskFreeRate = (parseFloat(riskFreeRatePct)||0)/100;
+  const solvedIV = (hasBreakevenInputs && T > 0)
+    ? impliedVol(premiumNum, underlyingPriceNum, strikeNum, T, riskFreeRate, right)
+    : null;
+  const ivOverrideNum = parseFloat(ivOverride);
+  const effectiveIV = (ivOverrideNum > 0) ? ivOverrideNum/100 : solvedIV;
+  const currentDelta = (hasBreakevenInputs && T > 0 && effectiveIV > 0)
+    ? bsDelta(underlyingPriceNum, strikeNum, T, riskFreeRate, effectiveIV, right)
+    : null;
+
+  // ---- Scenario: estimated value if underlying hits a target price by a target date ----
+  // Priced with Black-Scholes using the implied volatility solved above, held constant
+  // at today's level — the standard estimation approach, but real IV moves with market
+  // conditions and news, so treat this as a model estimate, not a guaranteed quote.
+  const targetPriceNum = parseFloat(targetPrice);
+  const hasScenarioInputs = hasBreakevenInputs && effectiveIV > 0 && targetPriceNum > 0 && targetDate && dte !== null && dte > 0;
+  let scenario = null;
+  if(hasScenarioInputs){
+    const daysFromNow = Math.round((new Date(targetDate+'T00:00:00') - new Date()) / (1000*60*60*24));
+    const daysRemainingAtTarget = Math.max(0, dte - Math.max(0, daysFromNow));
+    const tTarget = daysRemainingAtTarget/365;
+    const estimatedPremium = bsPrice(targetPriceNum, strikeNum, tTarget, riskFreeRate, effectiveIV, right);
+    const pnlPerShare = estimatedPremium - premiumNum;
+    const contractsForScenario = main && main.contracts > 0 ? main.contracts : 1;
+    const pnlTotal = convert(pnlPerShare, premiumCcy, displayCcy, fxRate) * 100 * contractsForScenario;
+    const returnPct = premiumNum > 0 ? (pnlPerShare/premiumNum)*100 : null;
+    scenario = {estimatedPremium, pnlPerShare, pnlTotal, returnPct, daysFromNow, daysRemainingAtTarget, contractsForScenario};
+  }
+
+  return (
+    <div>
+      <h1 className="page-title">Position sizer</h1>
+      <p className="page-sub">{account?account.name:''} · how many contracts fits your risk rule · shown in {displayCcy}</p>
+
+      <div className="cards" style={{marginBottom:'20px'}}>
+        <div className="card">
+          <div className="label">Portfolio equity ({displayCcy})</div>
+          <div className="value">{fmtMoney(portfolioEquity,displayCcy,0)}</div>
+          <div className="sub">holdings + cash, this account</div>
+        </div>
+        <div className="card">
+          <div className="label">Cash available ({displayCcy})</div>
+          <div className="value">{fmtMoney(cashAvailable,displayCcy,0)}</div>
+        </div>
+        <div className="card">
+          <div className="label">Current options exposure</div>
+          <div className="value">{fmtMoney(currentOptionsExposure,displayCcy,0)}</div>
+          <div className="sub">{currentHeatPct!==null?fmt(currentHeatPct,1)+'% of portfolio':'—'} · {optionHoldings.length} open position{optionHoldings.length!==1?'s':''}</div>
+        </div>
+      </div>
+
+      <form className="form" onSubmit={e=>e.preventDefault()}>
+        <div className="form-row">
+          <div className="form-field">
+            <label>Underlying ticker</label>
+            <input value={underlying} onChange={e=>setUnderlying(e.target.value)} placeholder="e.g. TSLA" />
+          </div>
+          <div className="form-field">
+            <label>Expiry</label>
+            <input type="date" value={expiry} onChange={e=>setExpiry(e.target.value)} />
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-field">
+            <label>Strike</label>
+            <input type="number" step="any" value={strike} onChange={e=>setStrike(e.target.value)} placeholder="e.g. 300" />
+          </div>
+          <div className="form-field" style={{maxWidth:'120px'}}>
+            <label>Right</label>
+            <select value={right} onChange={e=>setRight(e.target.value)}>
+              <option value="CALL">Call</option>
+              <option value="PUT">Put</option>
+            </select>
+          </div>
+        </div>
+        {optionSymbol && (
+          <div className="hint">
+            {optionSymbol}{dte!==null && (dte>=0 ? (' — ' + dte + ' days to expiry') : ' — already expired')}
+          </div>
+        )}
+        <div className="form-row" style={{marginTop:'12px'}}>
+          <div className="form-field">
+            <label>Premium per share (quote)</label>
+            <input type="number" step="any" value={premium} onChange={e=>setPremium(e.target.value)} placeholder="e.g. 5.00" />
+          </div>
+          <div className="form-field" style={{maxWidth:'90px'}}>
+            <label>Currency</label>
+            <select value={premiumCcy} onChange={e=>setPremiumCcy(e.target.value)}>
+              <option>USD</option><option>CAD</option>
+            </select>
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-field">
+            <label>Underlying's current price</label>
+            <div className="inline-btn">
+              <input type="number" step="any" value={underlyingPrice} onChange={e=>setUnderlyingPrice(e.target.value)} placeholder="e.g. 285.00" />
+              <button type="button" className="btn secondary sm" disabled={priceLoading} onClick={handleLookupUnderlying}>
+                {priceLoading ? <span className="spinner"></span> : 'Look up'}
+              </button>
+            </div>
+          </div>
+        </div>
+        {priceMsg && <div className={"hint " + (priceMsg.type==='err'?'err':'ok')}>{priceMsg.text}</div>}
+        <div className="form-row" style={{marginTop:'12px'}}>
+          <div className="form-field">
+            <label>Risk per trade (% of portfolio equity)</label>
+            <input type="number" step="any" value={riskPct} onChange={e=>setRiskPct(e.target.value)} placeholder="2" />
+          </div>
+          <div className="form-field">
+            <label>Max loss at exit (% of premium)</label>
+            <input type="number" step="any" value={stopLossPct} onChange={e=>setStopLossPct(e.target.value)} placeholder="100" />
+          </div>
+        </div>
+        <div className="hint" style={{marginBottom:'0'}}>Leave "max loss at exit" at 100% for a plain long call/put you'd hold to expiry or zero — it can lose the whole premium. Lower it if you plan to cut the trade at a defined stop (e.g. 50% means you'll exit once you're down half the premium).</div>
+      </form>
+
+      {!hasInputs ? (
+        <div className="empty" style={{marginTop:'16px'}}>Enter a premium, risk %, and max-loss % above to see a sizing recommendation.</div>
+      ) : (
+        <React.Fragment>
+        <div className="headline-card" style={{marginTop:'20px'}}>
+          <div className="label">Recommended size at {riskPctNum}% risk</div>
+          <div className="headline-value">{main.contracts} contract{main.contracts!==1?'s':''}</div>
+          <div className="sub" style={{marginTop:'8px'}}>
+            {fmtMoney(main.totalCost,displayCcy,0)} total cost · {fmtMoney(main.dollarAtRisk,displayCcy,0)} at risk
+            {main.cappedByCash && main.contracts < main.contractsByRisk ? ' · capped by available cash, not your risk rule' : ''}
+          </div>
+        </div>
+
+        {main.contracts === 0 && (
+          <div className="hint err" style={{marginBottom:'16px'}}>
+            {main.contractsByCash === 0 ? "You don't have enough cash in this account to buy even one contract at this premium." : "Your risk rule allows less than one contract's worth of loss — either raise the risk %, or this position doesn't fit your rule at this size."}
+          </div>
+        )}
+
+        <div className="section-head"><h2>How size scales with risk tolerance</h2></div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Risk level</th><th>Contracts</th><th>Total cost</th><th>$ at risk</th><th>% of portfolio</th></tr></thead>
+            <tbody>
+              {reference.map(row => (
+                <tr key={row.pct}>
+                  <td className="sym">{row.pct}%{row.pct===riskPctNum ? ' (your setting)' : ''}</td>
+                  <td className="num">{row.contracts}</td>
+                  <td className="num">{fmtMoney(row.totalCost,displayCcy,0)}</td>
+                  <td className="num">{fmtMoney(row.dollarAtRisk,displayCcy,0)}</td>
+                  <td className="num">{portfolioEquity>0 ? fmt(row.totalCost/portfolioEquity*100,1)+'%' : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="hint" style={{marginTop:'10px', marginBottom:'20px'}}>
+          Most professional risk managers cap any single trade at 1-2% of total account equity; more aggressive discretionary traders sometimes run 5%, and going past that on one options position is generally considered concentrated / high-risk. This tool takes whichever is smaller — your risk-based limit or what you can actually afford in cash — so it never recommends a size you can't pay for.
+        </p>
+
+        <div className="section-head"><h2>Portfolio heat if you add this trade</h2></div>
+        <div className="cards" style={{marginBottom:'8px'}}>
+          <div className="card">
+            <div className="label">Options exposure now</div>
+            <div className="value">{fmtMoney(currentOptionsExposure,displayCcy,0)}</div>
+            <div className="sub">{currentHeatPct!==null?fmt(currentHeatPct,1)+'% of portfolio':'—'}</div>
+          </div>
+          <div className="card">
+            <div className="label">Options exposure after this trade</div>
+            <div className={"value "+(projectedHeatPct!==null && projectedHeatPct>25 ? 'loss':'')}>{fmtMoney(projectedExposure,displayCcy,0)}</div>
+            <div className="sub">{projectedHeatPct!==null?fmt(projectedHeatPct,1)+'% of portfolio':'—'}</div>
+          </div>
+        </div>
+        <p className="hint" style={{marginBottom:'20px'}}>
+          This is your total worst-case exposure across every open option position if they all went to zero, including this one. There's no universal rule, but many traders get uncomfortable once total options exposure (as distinct from any single trade) climbs past roughly 20-25% of the portfolio — it stops being "a few sized bets" and starts being a leveraged bet on the whole book.
+        </p>
+
+        <div className="section-head"><h2>Breakeven &amp; required move</h2></div>
+        {!hasBreakevenInputs ? (
+          <div className="empty" style={{marginBottom:'20px'}}>Enter the strike and look up the underlying's current price to see the breakeven.</div>
+        ) : (
+          <React.Fragment>
+          <div className="cards" style={{marginBottom:'8px'}}>
+            <div className="card">
+              <div className="label">Breakeven price</div>
+              <div className="value">{fmtMoney(breakeven, premiumCcy)}</div>
+            </div>
+            <div className="card">
+              <div className="label">Required move</div>
+              <div className="value">{fmt(Math.abs(requiredMovePct),1)}% {needsToRise?'up':'down'}</div>
+              <div className="sub">from {fmtMoney(underlyingPriceNum,premiumCcy)} by expiry{dte!==null?(' ('+dte+'d)'):''}</div>
+            </div>
+            <div className="card">
+              <div className="label">Implied volatility</div>
+              <div className="value">{effectiveIV>0 ? fmt(effectiveIV*100,1)+'%' : '—'}</div>
+              <div className="sub">{ivOverrideNum>0 ? 'your override' : (solvedIV!==null ? 'solved from your premium' : '—')}</div>
+            </div>
+            {currentDelta !== null && (
+              <div className="card">
+                <div className="label">Delta</div>
+                <div className="value">{fmt(currentDelta,2)}</div>
+                <div className="sub">~${fmt(Math.abs(currentDelta)*100,0)} move per $1 in the underlying, per contract</div>
+              </div>
+            )}
+          </div>
+          <div className="form-row" style={{maxWidth:'420px', marginBottom:'8px'}}>
+            <div className="form-field">
+              <label>Use a different IV instead (e.g. from your broker)</label>
+              <input type="number" step="any" value={ivOverride} onChange={e=>setIvOverride(e.target.value)} placeholder={solvedIV!==null ? fmt(solvedIV*100,1)+' (solved)' : 'e.g. 45'} />
+            </div>
+            <div className="form-field" style={{maxWidth:'140px'}}>
+              <label>Risk-free rate %</label>
+              <input type="number" step="any" value={riskFreeRatePct} onChange={e=>setRiskFreeRatePct(e.target.value)} />
+            </div>
+          </div>
+          <p className="hint" style={{marginBottom:'20px'}}>Breakeven is where the option's intrinsic value alone covers what you paid — the underlying has to move further than this for the trade to be genuinely profitable after typically also covering time value that's decayed away. The implied volatility above is solved with Black-Scholes from your premium, strike, expiry, and the underlying's price — it should be close to what your broker shows for this same contract; small gaps can come from bid/ask spread or a different rate/dividend assumption. Leave the override blank to use the solved value.</p>
+          </React.Fragment>
+        )}
+
+        <div className="section-head"><h2>Scenario: price target by a date</h2></div>
+        <div className="form-row" style={{maxWidth:'420px'}}>
+          <div className="form-field">
+            <label>If {underlying.trim().toUpperCase()||'the underlying'} is at</label>
+            <input type="number" step="any" value={targetPrice} onChange={e=>setTargetPrice(e.target.value)} placeholder="e.g. 310.00" />
+          </div>
+          <div className="form-field">
+            <label>by this date</label>
+            <input type="date" value={targetDate} onChange={e=>setTargetDate(e.target.value)} max={expiry||undefined} />
+          </div>
+        </div>
+        {!hasBreakevenInputs ? (
+          <div className="empty">Look up the underlying's current price above first — the estimate needs it to solve for implied volatility.</div>
+        ) : !hasScenarioInputs ? (
+          <div className="empty">Enter a target price and a date on or before expiry to see the estimate.</div>
+        ) : (
+          <React.Fragment>
+          <div className="headline-card">
+            <div className="label">Estimated P&amp;L for {scenario.contractsForScenario} contract{scenario.contractsForScenario!==1?'s':''}</div>
+            <div className={"headline-value "+plClass(scenario.pnlTotal)}>{fmtMoney(scenario.pnlTotal,displayCcy,0)}</div>
+            <div className="sub" style={{marginTop:'8px'}}>
+              est. premium {fmtMoney(scenario.estimatedPremium,premiumCcy)} (from {fmtMoney(premiumNum,premiumCcy)}) · {scenario.returnPct!==null?fmt(scenario.returnPct,0)+'%':'—'} on premium · {scenario.daysRemainingAtTarget}d left to expiry at that point
+            </div>
+          </div>
+          <p className="hint" style={{marginBottom:'0'}}>
+            Priced with Black-Scholes using the implied volatility above, held constant at today's level. That's the standard way to estimate this, but it's still a model, not a guaranteed quote — real IV moves with news, earnings, and market conditions, and a shift in IV between now and your target date would change the real price, sometimes a lot for longer-dated or further-out-of-the-money contracts.
+          </p>
+          </React.Fragment>
+        )}
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+function LogTrade({account, d, onUpdate}){
+  const [side, setSide] = useState('BUY');
+  const [assetType, setAssetType] = useState('STOCK'); // STOCK | OPTION
+  const [symbol, setSymbol] = useState('');
+  const [name, setName] = useState('');
+  const [underlying, setUnderlying] = useState('');
+  const [expiry, setExpiry] = useState('');
+  const [strike, setStrike] = useState('');
+  const [right, setRight] = useState('CALL');
+  const [qty, setQty] = useState('');
+  const [price, setPrice] = useState('');
+  const [ccy, setCcy] = useState('USD');
+  const [date, setDate] = useState(todayStr());
+  const [notes, setNotes] = useState('');
+  const [priceLoading, setPriceLoading] = useState(false);
+  const [msg, setMsg] = useState(null); // {type:'ok'|'err', text}
+
+  const holdings = d.holdings || [];
+  const isOption = assetType === 'OPTION';
+  const optionSymbol = isOption ? buildOptionSymbol(underlying, expiry, strike, right) : '';
+  const effectiveSymbol = isOption ? optionSymbol : symbol.trim().toUpperCase();
+  const multiplier = isOption ? 100 : 1;
+  const existing = holdings.find(h => h.symbol.toUpperCase() === effectiveSymbol.toUpperCase() && effectiveSymbol);
+
+  async function handleLookup(){
+    if(!symbol.trim()){ setMsg({type:'err', text:'Enter a ticker symbol first.'}); return; }
+    setPriceLoading(true); setMsg(null);
+    try{
+      const p = await lookupPrice(symbol.trim().toUpperCase());
+      setPrice(p.price);
+      if(p.currency) setCcy(p.currency);
+      setMsg({type:'ok', text:'Filled current price for ' + symbol.trim().toUpperCase() + ' as of ' + (p.asOf||'now') + '.'});
+    }catch(e){
+      setMsg({type:'err', text:e.message});
+    }
+    setPriceLoading(false);
+  }
+
+  async function submit(e){
+    e.preventDefault();
+    setMsg(null);
+    const sym = effectiveSymbol;
+    const q = parseFloat(qty);
+    const p = parseFloat(price);
+    if(!sym || !q || !p || q<=0 || p<=0){
+      setMsg({type:'err', text: isOption ? 'Fill in the underlying, expiry, strike, quantity, and premium.' : 'Fill in a valid symbol, quantity, and price.'});
+      return;
+    }
+    const displayName = isOption ? (underlying.trim().toUpperCase() + ' ' + strike + ' ' + (right==='CALL'?'Call':'Put') + ' exp ' + expiry) : (name.trim() || sym);
+    const activityEntry = {
+      id: uid(), date, time:'', type:'Trade', subType:side,
+      description: side + ' ' + q + ' ' + sym + ' @ ' + p + ' ' + ccy + (isOption?' (x100 multiplier)':'') + ' (manual entry)',
+      direction:'', symbol:sym, quantity:q, unitPrice:p, commission:0,
+      netCash: side==='BUY' ? -(q*p*multiplier) : (q*p*multiplier), ccy,
+    };
+
+    if(side === 'BUY'){
+      let newHoldings;
+      if(existing){
+        const totalQty = existing.qty + q;
+        const totalCost = (existing.avgCost||0)*existing.qty + p*q;
+        const newAvg = totalCost/totalQty;
+        newHoldings = holdings.map(h => h.id===existing.id ? {...h, qty:totalQty, avgCost:newAvg, marketPrice:p, marketPriceCcy:ccy, marketValue:totalQty*p*multiplier, marketValueCcy:ccy, unrealized:(p-newAvg)*totalQty*multiplier, unrealizedCcy:ccy} : h);
+      } else {
+        newHoldings = [...holdings, {
+          id: uid(), symbol:sym, name:displayName, secType: isOption?'OPTION':'EQUITY', qty:q,
+          marketPrice:p, marketPriceCcy:ccy, avgCost:p, bookValueCad:null,
+          marketValue:q*p*multiplier, marketValueCcy:ccy, unrealized:0, unrealizedCcy:ccy, source:'manual', notes:notes.trim(),
+        }];
+      }
+      await onUpdate({holdings:newHoldings, activity:[activityEntry, ...(d.activity||[])]});
+      setMsg({type:'ok', text:'Logged buy: ' + q + ' ' + sym + ' @ ' + p + ' ' + ccy + (isOption ? (' (total ' + fmtMoney(q*p*multiplier,ccy) + ')') : '') + '.'});
+    } else {
+      if(!existing || existing.qty < q){
+        setMsg({type:'err', text: existing ? ('You only hold ' + existing.qty + ' of ' + sym + '.') : ('No existing holding found for ' + sym + ' in this account.')});
+        return;
+      }
+      const existingMultiplier = existing.secType==='OPTION' ? 100 : 1;
+      const realizedPnl = (p - (existing.avgCost||0)) * q * existingMultiplier;
+      const remainingQty = existing.qty - q;
+      let newHoldings;
+      if(remainingQty <= 0){
+        newHoldings = holdings.filter(h => h.id !== existing.id);
+      } else {
+        newHoldings = holdings.map(h => h.id===existing.id ? {...h, qty:remainingQty, marketValue:remainingQty*h.marketPrice*existingMultiplier, unrealized:(h.marketPrice-h.avgCost)*remainingQty*existingMultiplier} : h);
+      }
+      const realizedEntry = {
+        id: uid(), date, symbol:sym, name: existing.name||sym, orderId:'manual',
+        realizedCad: ccy==='CAD' ? realizedPnl : null,
+        realizedUsd: ccy==='USD' ? realizedPnl : null,
+        netProceedsCad: null, netProceedsUsd: ccy==='USD' ? q*p*existingMultiplier : null,
+        initialInvCad: null, initialInvUsd: ccy==='USD' ? -(existing.avgCost*q*existingMultiplier) : null,
+        fx: null, source:'manual', notes:notes.trim(),
+      };
+      await onUpdate({holdings:newHoldings, realized:[realizedEntry, ...(d.realized||[])], activity:[activityEntry, ...(d.activity||[])]});
+      setMsg({type:'ok', text:'Logged sell: ' + q + ' ' + sym + ' @ ' + p + ' ' + ccy + '. Realized P&L: ' + fmt(realizedPnl) + ' ' + ccy + '.'});
+    }
+    setSymbol(''); setName(''); setQty(''); setPrice(''); setUnderlying(''); setExpiry(''); setStrike(''); setNotes('');
+  }
+
+  return (
+    <div>
+      <h1 className="page-title">Log a trade</h1>
+      <p className="page-sub">{account?account.name:''} · type a ticker and let Blotter look up the price, or enter it yourself</p>
+
+      <div className="toggle-row" style={{maxWidth:'520px'}}>
+        <button className={side==='BUY'?'active':''} onClick={()=>setSide('BUY')} type="button">Buy</button>
+        <button className={side==='SELL'?'active':''} onClick={()=>setSide('SELL')} type="button">Sell</button>
+      </div>
+      <div className="toggle-row" style={{maxWidth:'520px'}}>
+        <button className={assetType==='STOCK'?'active':''} onClick={()=>setAssetType('STOCK')} type="button">Stock / ETF</button>
+        <button className={assetType==='OPTION'?'active':''} onClick={()=>setAssetType('OPTION')} type="button">Option</button>
+      </div>
+
+      <form className="form" onSubmit={submit}>
+        {!isOption && (
+          <React.Fragment>
+          <div className="form-row">
+            <div className="form-field">
+              <label>Ticker symbol</label>
+              <input value={symbol} onChange={e=>setSymbol(e.target.value)} placeholder="e.g. NBIS" />
+            </div>
+            {side==='BUY' && !existing && (
+              <div className="form-field">
+                <label>Name (optional)</label>
+                <input value={name} onChange={e=>setName(e.target.value)} placeholder="Company / fund name" />
+              </div>
+            )}
+          </div>
+          {existing && <div className="hint">You currently hold {existing.qty} @ avg cost {fmtMoney(existing.avgCost, existing.marketValueCcy)}</div>}
+          </React.Fragment>
+        )}
+
+        {isOption && (
+          <React.Fragment>
+          <div className="form-row">
+            <div className="form-field">
+              <label>Underlying ticker</label>
+              <input value={underlying} onChange={e=>setUnderlying(e.target.value)} placeholder="e.g. TSLA" />
+            </div>
+            <div className="form-field">
+              <label>Expiry</label>
+              <input type="date" value={expiry} onChange={e=>setExpiry(e.target.value)} />
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-field">
+              <label>Strike</label>
+              <input type="number" step="any" value={strike} onChange={e=>setStrike(e.target.value)} placeholder="e.g. 300" />
+            </div>
+            <div className="form-field" style={{maxWidth:'120px'}}>
+              <label>Right</label>
+              <select value={right} onChange={e=>setRight(e.target.value)}>
+                <option value="CALL">Call</option>
+                <option value="PUT">Put</option>
+              </select>
+            </div>
+          </div>
+          {optionSymbol && <div className="hint">{optionSymbol} — 1 contract = 100 shares, so totals below are automatically ×100.</div>}
+          {existing && <div className="hint">You currently hold {existing.qty} contract{existing.qty!==1?'s':''} @ avg premium {fmtMoney(existing.avgCost, existing.marketValueCcy)}</div>}
+          </React.Fragment>
+        )}
+
+        <div className="form-row" style={{marginTop:'12px'}}>
+          <div className="form-field">
+            <label>{isOption ? 'Contracts' : 'Quantity'}</label>
+            <input type="number" step="any" value={qty} onChange={e=>setQty(e.target.value)} placeholder="0" />
+          </div>
+          <div className="form-field">
+            <label>{isOption ? 'Premium per share' : 'Price per unit'}</label>
+            <div className="inline-btn">
+              <input type="number" step="any" value={price} onChange={e=>setPrice(e.target.value)} placeholder="0.00" />
+              {!isOption && (
+                <button type="button" className="btn secondary sm" disabled={priceLoading} onClick={handleLookup}>
+                  {priceLoading ? <span className="spinner"></span> : 'Look up'}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="form-field" style={{maxWidth:'90px'}}>
+            <label>Currency</label>
+            <select value={ccy} onChange={e=>setCcy(e.target.value)}>
+              <option>USD</option><option>CAD</option>
+            </select>
+          </div>
+        </div>
+        {isOption && qty && price && (
+          <div className="hint">Total {side==='BUY'?'cost':'proceeds'}: {fmtMoney(parseFloat(qty||0)*parseFloat(price||0)*100, ccy)}</div>
+        )}
+        {isOption && (
+          <div className="hint" style={{marginBottom:'4px'}}>Options move fast and auto-lookup isn't reliable for them — enter the current premium yourself.</div>
+        )}
+        <div className="form-row" style={{marginTop:'8px'}}>
+          <div className="form-field" style={{maxWidth:'200px'}}>
+            <label>Date</label>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)} />
+          </div>
+          <div className="form-field">
+            <label>Notes (optional)</label>
+            <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Strategy, reason for the trade…" />
+          </div>
+        </div>
+        {msg && <div className={"hint " + (msg.type==='err'?'err':'ok')} style={{marginBottom:'12px'}}>{msg.text}</div>}
+        <button className="btn" type="submit">Log {side==='BUY'?'buy':'sell'}</button>
+      </form>
+    </div>
+  );
+}
+
+function Import({account, d, onUpdate}){
+  const [log, setLog] = useState([]);
+  const fileRef = useRef(null);
+
+  function addLog(line){ setLog(prev => [...prev, line]); }
+
+  function handleFiles(files){
+    setLog([]);
+    Array.from(files).forEach(file => {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const headers = results.meta.fields || [];
+          const type = detectCsvType(headers);
+          if(type === 'holdings'){
+            const rows = normalizeHoldings(results.data);
+            const cashRows = normalizeCash(results.data);
+            onUpdate({holdings: rows, cash: cashRows});
+            addLog('✓ ' + file.name + ' — recognized as a holdings report, loaded ' + rows.length + ' positions and ' + cashRows.length + ' cash balance(s).');
+          } else if(type === 'realized'){
+            const rows = normalizeRealized(results.data);
+            onUpdate({realized: rows});
+            addLog('✓ ' + file.name + ' — recognized as a realized gain/loss report, loaded ' + rows.length + ' closed trades.');
+          } else if(type === 'activity'){
+            const rows = normalizeActivity(results.data);
+            onUpdate({activity: rows});
+            addLog('✓ ' + file.name + ' — recognized as an activity/transaction export, loaded ' + rows.length + ' entries.');
+          } else {
+            addLog('✗ ' + file.name + ' — could not recognize this file\'s columns. Expected a holdings, realized gain/loss, or activity export.');
+          }
+        },
+        error: (err) => addLog('✗ ' + file.name + ' — ' + err.message),
+      });
+    });
+  }
+
+  return (
+    <div>
+      <h1 className="page-title">Import</h1>
+      <p className="page-sub">{account?account.name:''} · load CSVs from your brokerage export</p>
+
+      <div className="import-box">
+        <h3>Upload CSVs</h3>
+        <p>Drop in your holdings report, realized gain/loss report, and/or activity export for this account. Each import replaces the previous data of that type for this account.</p>
+        <div className="drop" onClick={()=>fileRef.current.click()}
+          onDragOver={e=>e.preventDefault()}
+          onDrop={e=>{e.preventDefault(); handleFiles(e.dataTransfer.files);}}>
+          Click to choose files, or drag CSVs here
+          <input ref={fileRef} type="file" accept=".csv" multiple onChange={e=>handleFiles(e.target.files)} />
+        </div>
+        {log.length>0 && <div className="import-log">{log.join('\n')}</div>}
+      </div>
+
+      <div className="import-box">
+        <h3>Currently loaded for {account?account.name:'this account'}</h3>
+        <p style={{marginBottom:0}}>
+          {(d.holdings||[]).length} holdings · {(d.cash||[]).length} cash balances · {(d.realized||[]).length} realized trades · {(d.activity||[]).length} activity rows
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Settings(){
+  const [keyId, setKeyId] = useState('');
+  const [secret, setSecret] = useState('');
+  const [saved, setSaved] = useState(false);
+  const [testMsg, setTestMsg] = useState(null);
+  const [testing, setTesting] = useState(false);
+
+  const [supaUrl, setSupaUrl] = useState('');
+  const [supaAnonKey, setSupaAnonKey] = useState('');
+  const [supaSyncKey, setSupaSyncKey] = useState('');
+  const [supaSaved, setSupaSaved] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [cloudTimestamp, setCloudTimestamp] = useState(null);
+
+  useEffect(() => {
+    const creds = getAlpacaCreds();
+    if(creds){ setKeyId(creds.keyId||''); setSecret(creds.secret||''); setSaved(true); }
+    const supa = getSupabaseConfig();
+    if(supa){
+      setSupaUrl(supa.url||''); setSupaAnonKey(supa.anonKey||''); setSupaSyncKey(supa.syncKey||'');
+      setSupaSaved(true);
+      checkCloudTimestamp().then(ts => setCloudTimestamp(ts));
+    }
+  }, []);
+
+  function handleSaveSupa(){
+    saveSupabaseConfig(supaUrl.trim(), supaAnonKey.trim(), supaSyncKey.trim());
+    setSupaSaved(true);
+    setSyncMsg(null);
+    checkCloudTimestamp().then(ts => setCloudTimestamp(ts));
+  }
+  function handleClearSupa(){
+    clearSupabaseConfig();
+    setSupaUrl(''); setSupaAnonKey(''); setSupaSyncKey(''); setSupaSaved(false); setSyncMsg(null); setCloudTimestamp(null);
+  }
+  function generateSyncKey(){
+    const key = (crypto.randomUUID ? crypto.randomUUID() : (Date.now().toString(36)+Math.random().toString(36).slice(2)));
+    setSupaSyncKey(key);
+  }
+  async function handlePush(){
+    setSyncing(true); setSyncMsg(null);
+    try{
+      const ts = await pushToCloud();
+      setSyncMsg({type:'ok', text:'Pushed to cloud at ' + new Date(ts).toLocaleString() + '.'});
+      setCloudTimestamp(ts);
+    }catch(e){
+      setSyncMsg({type:'err', text:e.message});
+    }
+    setSyncing(false);
+  }
+  async function handlePull(){
+    if(!confirm('This will overwrite everything in this browser with whatever is saved in the cloud. Continue?')) return;
+    setSyncing(true); setSyncMsg(null);
+    try{
+      const ts = await pullFromCloud();
+      setSyncMsg({type:'ok', text:'Pulled from cloud (saved ' + new Date(ts).toLocaleString() + '). Reloading…'});
+      setTimeout(() => window.location.reload(), 1200);
+    }catch(e){
+      setSyncMsg({type:'err', text:e.message});
+      setSyncing(false);
+    }
+  }
+
+  function handleSave(){
+    saveAlpacaCreds(keyId.trim(), secret.trim());
+    setSaved(true);
+    setTestMsg(null);
+  }
+  function handleClear(){
+    clearAlpacaCreds();
+    setKeyId(''); setSecret(''); setSaved(false); setTestMsg(null);
+  }
+  async function handleTest(){
+    setTesting(true); setTestMsg(null);
+    try{
+      const p = await lookupPrice('AAPL');
+      setTestMsg({type:'ok', text:'Connected — AAPL last traded at ' + fmtMoney(p.price,'USD') + '.'});
+    }catch(e){
+      setTestMsg({type:'err', text:e.message});
+    }
+    setTesting(false);
+  }
+
+  return (
+    <div>
+      <h1 className="page-title">Settings</h1>
+      <p className="page-sub">Alpaca API credentials for price lookups — stored only in this browser</p>
+
+      <div className="import-box">
+        <h3>Alpaca Market Data API</h3>
+        <p>
+          Get a free key from your <a href="https://app.alpaca.markets/paper/dashboard/overview" target="_blank" rel="noopener" style={{color:'var(--brass)'}}>Alpaca paper trading dashboard</a>. This covers stock and ETF price lookups only — options contracts and FX aren't covered by this key (FX uses a separate free service automatically; options need manual entry).
+        </p>
+        <div className="hint" style={{marginBottom:'12px'}}>
+          Heads up: Alpaca's market-data endpoint has a known, longstanding browser CORS issue (unrelated to your key) — if the test below fails with a network/CORS error, that's Alpaca's API behavior, not a mistake in your key.
+        </div>
+        <div className="form-row" style={{maxWidth:'520px'}}>
+          <div className="form-field">
+            <label>API Key ID</label>
+            <input value={keyId} onChange={e=>setKeyId(e.target.value)} placeholder="PK..." />
+          </div>
+          <div className="form-field">
+            <label>Secret Key</label>
+            <input type="password" value={secret} onChange={e=>setSecret(e.target.value)} placeholder="•••••••••" />
+          </div>
+        </div>
+        <div className="inline-btn" style={{marginTop:'8px'}}>
+          <button className="btn" type="button" onClick={handleSave} disabled={!keyId.trim()||!secret.trim()}>Save</button>
+          <button className="btn secondary sm" type="button" onClick={handleTest} disabled={!saved||testing}>
+            {testing ? <span className="spinner"></span> : 'Test connection'}
+          </button>
+          {saved && <button className="btn secondary sm" type="button" onClick={handleClear}>Clear</button>}
+        </div>
+        {testMsg && <div className={"hint " + (testMsg.type==='err'?'err':'ok')} style={{marginTop:'10px'}}>{testMsg.text}</div>}
+      </div>
+
+      <div className="import-box">
+        <h3>Cloud sync (Supabase)</h3>
+        <p>
+          Lets you use the same data on multiple devices (e.g. desktop and phone). This needs a free <a href="https://supabase.com" target="_blank" rel="noopener" style={{color:'var(--brass)'}}>Supabase</a> project — a small hosted database with its own API.
+        </p>
+        <div className="hint" style={{marginBottom:'12px'}}>
+          One-time setup: create a free Supabase project, then in its SQL Editor run:
+          <pre style={{background:'var(--bg)', padding:'10px', borderRadius:'4px', overflowX:'auto', fontSize:'11.5px', marginTop:'6px'}}>{`create table blotter_sync (
+  sync_key text primary key,
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table blotter_sync enable row level security;
+create policy "allow all" on blotter_sync for all using (true) with check (true);`}</pre>
+          Then grab your Project URL and anon/public API key from Settings → API in the Supabase dashboard, and paste them below. There's no real login here — the sync key you generate is a shared secret between your own devices, so keep it as private as a password and enter the exact same URL, anon key, and sync key on every device you want synced.
+        </div>
+        <div className="form-row" style={{maxWidth:'560px'}}>
+          <div className="form-field">
+            <label>Supabase Project URL</label>
+            <input value={supaUrl} onChange={e=>setSupaUrl(e.target.value)} placeholder="https://xxxx.supabase.co" />
+          </div>
+        </div>
+        <div className="form-row" style={{maxWidth:'560px'}}>
+          <div className="form-field">
+            <label>Anon (public) API key</label>
+            <input type="password" value={supaAnonKey} onChange={e=>setSupaAnonKey(e.target.value)} placeholder="eyJ..." />
+          </div>
+        </div>
+        <div className="form-row" style={{maxWidth:'560px'}}>
+          <div className="form-field">
+            <label>Sync key (same on every device)</label>
+            <div className="inline-btn">
+              <input value={supaSyncKey} onChange={e=>setSupaSyncKey(e.target.value)} placeholder="click Generate, then copy to your other device" />
+              <button className="btn secondary sm" type="button" onClick={generateSyncKey}>Generate</button>
+            </div>
+          </div>
+        </div>
+        <div className="inline-btn" style={{marginTop:'8px', flexWrap:'wrap'}}>
+          <button className="btn" type="button" onClick={handleSaveSupa} disabled={!supaUrl.trim()||!supaAnonKey.trim()||!supaSyncKey.trim()}>Save</button>
+          <button className="btn secondary sm" type="button" onClick={handlePush} disabled={!supaSaved||syncing}>
+            {syncing ? <span className="spinner"></span> : 'Push this device \u2192 cloud'}
+          </button>
+          <button className="btn secondary sm" type="button" onClick={handlePull} disabled={!supaSaved||syncing}>
+            {syncing ? <span className="spinner"></span> : 'Pull cloud \u2192 this device'}
+          </button>
+          {supaSaved && <button className="btn secondary sm" type="button" onClick={handleClearSupa}>Clear</button>}
+        </div>
+        {cloudTimestamp && <div className="hint" style={{marginTop:'10px'}}>Cloud last updated: {new Date(cloudTimestamp).toLocaleString()}</div>}
+        {syncMsg && <div className={"hint " + (syncMsg.type==='err'?'err':'ok')} style={{marginTop:'10px'}}>{syncMsg.text}</div>}
+        <p className="hint" style={{marginTop:'10px'}}>This is manual, not automatic — push after making changes on one device, pull before starting work on another. There's no conflict resolution: pulling always overwrites this device completely, and pushing always overwrites the cloud completely, so avoid editing on two devices at the same time without syncing in between.</p>
+      </div>
+
+      <div className="import-box">
+        <h3>How your data is stored</h3>
+        <p style={{marginBottom:0}}>Accounts, holdings, and trades are saved in this browser's local storage. Without cloud sync set up above, that data stays on this one device/browser only — it doesn't sync anywhere and isn't sent to Anthropic or anyone else. It only leaves your browser when this page calls Alpaca for a price, or Supabase to sync (if you've set that up). Clearing your browser data will erase everything not backed up to the cloud.</p>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('app')).render(<App />);
+</script>
+</body></html>
